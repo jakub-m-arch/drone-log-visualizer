@@ -332,6 +332,9 @@ async fn unreachable_dji_api_is_a_gateway_error() {
     let (status, body) = send_json(&app, multipart("enc.txt", &log)).await;
     assert_eq!(status, StatusCode::BAD_GATEWAY);
     assert_eq!(body["error"]["code"], "network_error");
+    // The underlying cause is reported, the key is not.
+    let message = body["error"]["message"].as_str().unwrap().to_lowercase();
+    assert!(message.contains("connect"), "{message}");
     assert!(!body.to_string().contains(GOOD_KEY));
 }
 

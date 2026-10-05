@@ -1,0 +1,19 @@
+services:
+  dji-log-viewer:
+    build: .
+    image: dji-log-viewer:latest
+    ports:
+      - "${PORT:-8080}:8080"
+    environment:
+      # Read from your shell or from the .env file next to this compose file.
+      # Optional: only needed for encrypted logs (format v13+, current DJI apps).
+      DJI_API_KEY: ${DJI_API_KEY:-}
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-200}
+      MAP_TILE_URL: ${MAP_TILE_URL:-https://tile.openstreetmap.org/{z}/{x}/{y}.png}
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - dji-data:/data
+    restart: unless-stopped
+
+volumes:
+  dji-data:

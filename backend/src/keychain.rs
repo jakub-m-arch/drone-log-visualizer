@@ -53,17 +53,13 @@ pub async fn fetch(
         .json(request)
         .send()
         .await
-        // `without_url` keeps the message short; the key is in a header and never part of it.
-        .map_err(|e| AppError::Network(e.without_url().to_string()))?;
+        .map_err(network_error)?;
 
     let status = response.status();
     if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
         return Err(AppError::InvalidApiKey);
     }
-    let body = response
-        .text()
-        .await
-        .map_err(|e| AppError::Network(e.without_url().to_string()))?;
+    let body = response.text().await.map_err(network_error)?;
     if !status.is_success() {
         return Err(AppError::DjiApi(format!(
             "HTTP {status}: {}",
@@ -71,6 +67,24 @@ pub async fn fetch(
         )));
     }
     parse_response(&body)
+}
+
+/// Includes the underlying cause ("connection refused", "invalid peer
+/// certificate", ...), which `reqwest` keeps out of its own message. The API
+/// key travels in a header and is never part of these errors.
+fn network_error(e: reqwest::Error) -> AppError {
+    let e = e.without_url();
+    let mut msg = e.to_string();
+    let mut source = std::error::Error::source(&e);
+    while let Some(cause) = source {
+        let text = cause.to_string();
+        if !msg.contains(&text) {
+            msg.push_str(": ");
+            msg.push_str(&text);
+        }
+        source = cause.source();
+    }
+    AppError::Network(msg)
 }
 
 fn parse_response(body: &str) -> AppResult<Keychains> {

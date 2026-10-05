@@ -1,0 +1,126 @@
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-2: #eef1f5;
+  --border: #d9dee6;
+  --text: #1b2330;
+  --text-muted: #5d6878;
+  --accent: #1f6feb;
+  --accent-contrast: #ffffff;
+  --track: #ff6a00;
+  --warn: #b35900;
+  --warn-bg: #fff4e5;
+  --error: #c62828;
+  --error-bg: #fdecea;
+  --ok: #2e7d32;
+  --grid: rgba(0, 0, 0, 0.08);
+  --radius: 10px;
+  --shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.1);
+  color-scheme: light;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-size: 15px;
+  line-height: 1.45;
+  color: var(--text);
+  background: var(--bg);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1419;
+    --surface: #171d24;
+    --surface-2: #1f2730;
+    --border: #2c3642;
+    --text: #e6ebf1;
+    --text-muted: #94a1b2;
+    --accent: #4c9aff;
+    --accent-contrast: #0b1320;
+    --track: #ff8a33;
+    --warn: #ffb35c;
+    --warn-bg: #2d2214;
+    --error: #ff7b72;
+    --error-bg: #301717;
+    --ok: #7ee787;
+    --grid: rgba(255, 255, 255, 0.08);
+    --shadow: none;
+    color-scheme: dark;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  min-height: 100vh;
+}
+
+a {
+  color: var(--accent);
+}
+
+button,
+.button {
+  font: inherit;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 0.4rem 0.8rem;
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+button:hover,
+.button:hover {
+  background: var(--surface-2);
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+.alert {
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  border: 1px solid;
+}
+
+.alert.error {
+  background: var(--error-bg);
+  color: var(--error);
+  border-color: color-mix(in srgb, var(--error) 40%, transparent);
+}
+
+.alert.warn {
+  background: var(--warn-bg);
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 40%, transparent);
+}
+
+.alert p {
+  margin: 0.25rem 0 0;
+  color: var(--text);
+}
