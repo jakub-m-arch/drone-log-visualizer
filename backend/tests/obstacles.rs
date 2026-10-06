@@ -81,14 +81,23 @@ async fn mock_services() -> (String, Calls) {
                     body.into_bytes(),
                 );
             }
+            // Like GUGiK's NMT: a GeoTIFF with columns running north and rows
+            // running east (row 0 = max easting), tiepoint (min N, max E).
+            let mut swapped = vec![0.0f32; w * h];
+            for r in 0..h {
+                for col in 0..w {
+                    // (row r from north, col from west) -> (row from east, col from south)
+                    swapped[(w - 1 - col) * h + (h - 1 - r)] = data[r * w + col];
+                }
+            }
             let g = Grid {
-                width: w,
-                height: h,
-                left: e0,
-                top: n1,
+                width: h,
+                height: w,
+                left: n0,
+                top: e1,
                 px: 1.0,
                 py: 1.0,
-                data,
+                data: swapped,
                 nodata: None,
             };
             ([("content-type", "image/tiff")], encode_geotiff(&g))

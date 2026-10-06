@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use std::time::Duration;
 
 use super::puwg92;
-use super::raster::{self, BlockParams};
+use super::raster::{self, BlockParams, Raster};
 use crate::error::{AppError, AppResult};
 
 /// Geographic bounding box in degrees.
@@ -61,8 +61,12 @@ impl BBox {
 }
 
 fn client() -> reqwest::Client {
+    client_with_timeout(Duration::from_secs(90))
+}
+
+fn client_with_timeout(timeout: Duration) -> reqwest::Client {
     reqwest::Client::builder()
-        .timeout(Duration::from_secs(90))
+        .timeout(timeout)
         .user_agent(concat!(
             "dji-log-viewer/",
             env!("CARGO_PKG_VERSION"),
@@ -87,7 +91,12 @@ async fn get_with_retry(service: &str, url: &str) -> AppResult<reqwest::Response
     const ATTEMPTS: u32 = 4;
     let mut attempt = 1;
     loop {
-        match client().get(url).send().await {
+        // GUGiK can take a while to render a grid.
+        match client_with_timeout(Duration::from_secs(180))
+            .get(url)
+            .send()
+            .await
+        {
             Ok(res) => return Ok(res),
             Err(e)
                 if attempt < ATTEMPTS && !e.is_timeout() && (e.is_connect() || e.is_request()) =>
@@ -212,6 +221,27 @@ pub fn summarize_body(bytes: &[u8]) -> String {
     }
 }
 
+/// Size of one GUGiK request (metres per side).
+const GUGIK_TILE_M: f64 = 400.0;
+
+async fn fetch_mosaic(
+    service: &str,
+    template: &str,
+    area: (f64, f64, f64, f64),
+) -> AppResult<raster::Mosaic> {
+    let tiles = raster::tiles(area, GUGIK_TILE_M);
+    let mut grids = Vec::with_capacity(tiles.len());
+    for (i, tile) in tiles.iter().enumerate() {
+        let name = if tiles.len() > 1 {
+            format!("{service} (tile {}/{})", i + 1, tiles.len())
+        } else {
+            service.to_string()
+        };
+        grids.push(fetch_grid(&name, &fill_template(template, *tile), *tile).await?);
+    }
+    Ok(raster::Mosaic(grids))
+}
+
 async fn fetch_grid(
     service: &str,
     url: &str,
@@ -269,15 +299,12 @@ pub async fn gugik_lidar(req: LidarRequest<'_>) -> AppResult<Value> {
     let max_n = corners.iter().map(|c| c.1).fold(f64::MIN, f64::max).ceil();
     let area = (min_e, min_n, max_e, max_n);
 
-    let (dtm_url, dsm_url) = (
-        fill_template(req.dtm_template, area),
-        fill_template(req.dsm_template, area),
-    );
-    // One request at a time: GUGiK drops connections intermittently, and
-    // parallel connections from one address make it worse. Both requests are
-    // still made so an error names every failing service.
-    let dtm = fetch_grid("GUGiK NMT", &dtm_url, area).await;
-    let dsm = fetch_grid("GUGiK NMPT", &dsm_url, area).await;
+    // NMPT is a 0.5 m ASCII grid (~8 bytes per value), so large areas are
+    // fetched as 400 m tiles. One request at a time: GUGiK drops connections
+    // intermittently, and parallel connections make it worse. Both models
+    // are attempted so an error names every failing service.
+    let dtm = fetch_mosaic("GUGiK NMT", req.dtm_template, area).await;
+    let dsm = fetch_mosaic("GUGiK NMPT", req.dsm_template, area).await;
     let (dtm, dsm) = match (dtm, dsm) {
         (Ok(dtm), Ok(dsm)) => (dtm, dsm),
         (Err(e), Ok(_)) | (Ok(_), Err(e)) => return Err(e),
@@ -286,10 +313,10 @@ pub async fn gugik_lidar(req: LidarRequest<'_>) -> AppResult<Value> {
 
     let (re, rn) = puwg92::forward(req.reference.0, req.reference.1);
     let reference_ground = dtm.at(re, rn).map(f64::from).unwrap_or_else(|| {
-        // Take-off outside the returned grid: use the lowest ground instead.
-        dtm.data
+        // Take-off outside the returned grids: use the lowest ground instead.
+        dtm.0
             .iter()
-            .copied()
+            .flat_map(|g| g.data.iter().copied())
             .filter(|v| v.is_finite() && *v > -1000.0)
             .fold(f32::MAX, f32::min) as f64
     });

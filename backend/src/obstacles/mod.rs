@@ -16,8 +16,8 @@ use sources::{BBox, LidarRequest};
 const MARGIN_M: f64 = 100.0;
 /// Largest area side requested from Overpass.
 const MAX_TREES_SIDE_M: f64 = 5_000.0;
-/// Largest area side requested from GUGiK (1 m grids: ~2.25 M cells).
-const MAX_LIDAR_SIDE_M: f64 = 1_500.0;
+/// Largest area side requested from GUGiK (NMPT is 0.5 m: 4 M cells per km²).
+const MAX_LIDAR_SIDE_M: f64 = 1_000.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Source {

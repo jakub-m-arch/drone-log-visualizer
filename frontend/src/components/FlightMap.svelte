@@ -476,9 +476,16 @@
       onchange={(e) => toggleObstacle(source, e.currentTarget.checked)}
     />
     {label}
-    {#if st.loading}<span class="muted">· loading…</span>
+    {#if st.loading}<span class="muted">· loading{source === 'lidar' ? ' (up to a few minutes)' : ''}…</span>
     {:else if st.on && st.data}<span class="muted">· {st.data.data.features.length}</span>{/if}
   </label>
+  {#if st.on && st.data && !st.loading}
+    <button
+      class="refresh"
+      title="Fetch again from the service (the result is cached per flight)"
+      onclick={() => toggleObstacle(source, true, true)}>↻</button
+    >
+  {/if}
   {#if st.error}<div class="obstacle-error" title={st.error}>{st.error}</div>{/if}
 {/snippet}
 
@@ -626,6 +633,12 @@
     justify-content: flex-start;
     gap: 0.25rem;
     color: var(--text);
+  }
+  .refresh {
+    justify-self: start;
+    padding: 0 0.35rem;
+    font-size: 0.7rem;
+    margin-left: 1.2rem;
   }
   .obstacle-error {
     color: var(--error);

@@ -151,7 +151,10 @@ by the server, for the flight's area plus 100 m, and then cached in SQLite:
   surface (NMPT) models from airborne laser scanning, published free of charge
   by GUGiK. Their difference is the real height of every tree, building and
   other object above ground; it is drawn as 1 m blocks (objects ≥ 2.5 m, area
-  up to 1.5 × 1.5 km). Coordinates are converted to PUWG 1992 (EPSG:2180).
+  up to 1 × 1 km, fetched as 400 m tiles; this can take a few minutes).
+  Coordinates are converted to PUWG 1992 (EPSG:2180); GUGiK serves both
+  models "northing-first" (transposed), which is detected and corrected.
+  The ↻ button next to a layer fetches it again.
   The default requests use GUGiK's public WCS services (NMT
   `DTM_PL-KRON86-NH_TIFF`, NMPT `DSM_PL-KRON86-NH`, both in the Kronsztadt 86
   height datum). If GUGiK changes them, the error is shown in the map legend

@@ -39,6 +39,56 @@ impl Grid {
     }
 }
 
+/// Anything that can be sampled like an elevation grid.
+pub trait Raster {
+    fn at(&self, e: f64, n: f64) -> Option<f32>;
+    /// Smallest pixel size, metres.
+    fn min_pixel(&self) -> f64;
+}
+
+impl Raster for Grid {
+    fn at(&self, e: f64, n: f64) -> Option<f32> {
+        Grid::at(self, e, n)
+    }
+    fn min_pixel(&self) -> f64 {
+        self.px.min(self.py)
+    }
+}
+
+/// Grids fetched tile by tile; a point is looked up in the first tile that
+/// has a value for it.
+pub struct Mosaic(pub Vec<Grid>);
+
+impl Raster for Mosaic {
+    fn at(&self, e: f64, n: f64) -> Option<f32> {
+        self.0.iter().find_map(|g| g.at(e, n))
+    }
+    fn min_pixel(&self) -> f64 {
+        self.0
+            .iter()
+            .map(Raster::min_pixel)
+            .fold(f64::INFINITY, f64::min)
+    }
+}
+
+/// Splits (min E, min N, max E, max N) into tiles of at most `size` metres.
+pub fn tiles(area: (f64, f64, f64, f64), size: f64) -> Vec<(f64, f64, f64, f64)> {
+    let (min_e, min_n, max_e, max_n) = area;
+    let mut out = Vec::new();
+    let mut n = min_n;
+    while n < max_n {
+        let n1 = (n + size).min(max_n);
+        let mut e = min_e;
+        while e < max_e {
+            let e1 = (e + size).min(max_e);
+            out.push((e, n, e1, n1));
+            e = e1;
+        }
+        n = n1;
+    }
+    out
+}
+
 /// Reads a single-band GeoTIFF with ModelPixelScale + ModelTiepoint tags.
 pub fn read_geotiff(bytes: &[u8]) -> Result<Grid, String> {
     let mut dec = Decoder::new(Cursor::new(bytes)).map_err(|e| format!("not a TIFF: {e}"))?;
@@ -92,10 +142,8 @@ pub fn read_geotiff(bytes: &[u8]) -> Result<Grid, String> {
 /// `yllcorner|yllcenter`, `cellsize` or `dx`/`dy`, optional `nodata_value`,
 /// then rows from north to south).
 ///
-/// Servers for EPSG:2180 disagree on whether the grid's "x" is easting or
-/// northing. `expected` (min E, min N, max E, max N) is the requested box: the
-/// lower-left corner is matched against it and a northing-first grid is
-/// transposed into the usual north-up, easting-columns layout.
+/// The georeference is returned as written; see [`orient`] for grids that
+/// are served northing-first.
 pub fn read_aaigrid(bytes: &[u8], expected: (f64, f64, f64, f64)) -> Result<Grid, String> {
     let text =
         std::str::from_utf8(bytes).map_err(|_| "ASCII grid is not valid UTF-8".to_string())?;
@@ -148,40 +196,52 @@ pub fn read_aaigrid(bytes: &[u8], expected: (f64, f64, f64, f64)) -> Result<Grid
         ));
     }
 
-    let (min_e, min_n, _, _) = expected;
-    let normal = (x_ll - min_e).abs() + (y_ll - min_n).abs();
-    let swapped = (x_ll - min_n).abs() + (y_ll - min_e).abs();
-    if normal <= swapped {
-        return Ok(Grid {
-            width: ncols,
-            height: nrows,
-            left: x_ll,
-            top: y_ll + nrows as f64 * dy,
-            px: dx,
-            py: dy,
-            data: values[..ncols * nrows].to_vec(),
-            nodata,
-        });
-    }
-    // Northing-first grid: columns run north, rows run east (row 0 = max E).
-    let (w, h) = (nrows, ncols);
-    let mut data = vec![f32::NAN; w * h];
-    for row in 0..nrows {
-        for col in 0..ncols {
-            let (r, c) = (ncols - 1 - col, nrows - 1 - row);
-            data[r * w + c] = values[row * ncols + col];
-        }
-    }
+    let _ = expected;
     Ok(Grid {
-        width: w,
-        height: h,
-        left: y_ll,
-        top: x_ll + ncols as f64 * dx,
-        px: dy,
-        py: dx,
-        data,
+        width: ncols,
+        height: nrows,
+        left: x_ll,
+        top: y_ll + nrows as f64 * dy,
+        px: dx,
+        py: dy,
+        data: values[..ncols * nrows].to_vec(),
         nodata,
     })
+}
+
+/// Fixes grids served "northing-first" for EPSG:2180.
+///
+/// GUGiK writes both GeoTIFF and ASCII grids with the georeference axes
+/// swapped *and* the raster transposed: columns run north (from the minimum
+/// northing), rows run east (row 0 = maximum easting). Such a grid is detected
+/// by comparing its lower-left corner with the requested box
+/// (min E, min N, max E, max N) and transposed into north-up, easting columns.
+pub fn orient(g: Grid, expected: (f64, f64, f64, f64)) -> Grid {
+    let (min_e, min_n, _, _) = expected;
+    let bottom = g.top - g.height as f64 * g.py;
+    let normal = (g.left - min_e).abs() + (bottom - min_n).abs();
+    let swapped = (g.left - min_n).abs() + (bottom - min_e).abs();
+    if normal <= swapped {
+        return g;
+    }
+    let (w, h) = (g.height, g.width);
+    let mut data = vec![f32::NAN; w * h];
+    for row in 0..g.height {
+        for col in 0..g.width {
+            let (r, c) = (g.width - 1 - col, g.height - 1 - row);
+            data[r * w + c] = g.data[row * g.width + col];
+        }
+    }
+    Grid {
+        width: w,
+        height: h,
+        left: bottom,
+        top: g.left + g.width as f64 * g.px,
+        px: g.py,
+        py: g.px,
+        data,
+        nodata: g.nodata,
+    }
 }
 
 /// Splits a MIME multipart body (WCS 2.0 servers often answer GetCoverage
@@ -282,7 +342,7 @@ pub fn read_grid(bytes: &[u8], expected: (f64, f64, f64, f64)) -> Result<Grid, S
 
 fn read_single_grid(bytes: &[u8], expected: (f64, f64, f64, f64)) -> Result<Grid, String> {
     if bytes.starts_with(b"II*\0") || bytes.starts_with(b"MM\0*") {
-        read_geotiff(bytes)
+        read_geotiff(bytes).map(|g| orient(g, expected))
     } else if bytes
         .iter()
         .skip_while(|b| b.is_ascii_whitespace())
@@ -290,7 +350,7 @@ fn read_single_grid(bytes: &[u8], expected: (f64, f64, f64, f64)) -> Result<Grid
         .map(|b| b.to_ascii_lowercase())
         .eq(b"ncols".iter().copied())
     {
-        read_aaigrid(bytes, expected)
+        read_aaigrid(bytes, expected).map(|g| orient(g, expected))
     } else {
         let head: Vec<String> = bytes.iter().take(8).map(|b| format!("{b:02x}")).collect();
         Err(format!(
@@ -356,15 +416,15 @@ pub struct BlockParams {
 /// sample inside it; runs of neighbouring cells in a row with the same
 /// height (1 m steps) and ground (1 m) are merged into one block.
 pub fn blocks(
-    dsm: &Grid,
-    dtm: &Grid,
+    dsm: &impl Raster,
+    dtm: &impl Raster,
     (west, south, east, north): (f64, f64, f64, f64),
     p: &BlockParams,
 ) -> Vec<Block> {
     let cols = ((east - west) / p.cell_m).ceil().max(0.0) as usize;
     let rows = ((north - south) / p.cell_m).ceil().max(0.0) as usize;
     // Sub-samples per cell side, so a cell sees every DSM pixel inside it.
-    let sub = (p.cell_m / dsm.px.min(dsm.py)).ceil().clamp(1.0, 8.0) as usize;
+    let sub = (p.cell_m / dsm.min_pixel()).ceil().clamp(1.0, 8.0) as usize;
     let mut out: Vec<Block> = Vec::new();
 
     for r in 0..rows {
@@ -544,6 +604,28 @@ pub mod tests {
     }
 
     #[test]
+    fn northing_first_geotiff_is_transposed() {
+        // Exactly what GUGiK's NMT returned for 100 m (N) × 200 m (E) at 1 m:
+        // 100 × 200 px, tiepoint (486700 = min N, 637500 = max E).
+        // Value = 1000 * east_index + north_index (from the SW corner).
+        let served = grid(486_700.0, 637_500.0, 100, 200, 1.0, |col, row| {
+            (1000 * (199 - row) + col) as f32
+        });
+        let area = (637_300.0, 486_700.0, 637_500.0, 486_800.0);
+        let g = read_grid(&encode_geotiff(&served), area).unwrap();
+        assert_eq!((g.width, g.height), (200, 100));
+        assert_eq!((g.left, g.top), (637_300.0, 486_800.0));
+        assert_eq!(g.at(637_300.5, 486_700.5), Some(0.0)); // SW
+        assert_eq!(g.at(637_499.5, 486_700.5), Some(199_000.0)); // SE
+        assert_eq!(g.at(637_300.5, 486_799.5), Some(99.0)); // NW
+        assert_eq!(g.at(637_412.5, 486_733.5), Some(112_033.0));
+        // A normal (easting-first) grid is left alone.
+        let normal = grid(637_300.0, 486_800.0, 200, 100, 1.0, |_, _| 1.0);
+        let g = read_grid(&encode_geotiff(&normal), area).unwrap();
+        assert_eq!((g.width, g.left), (200, 637_300.0));
+    }
+
+    #[test]
     fn unknown_formats_are_rejected() {
         assert!(read_grid(b"<ServiceException/>", (0.0, 0.0, 1.0, 1.0)).is_err());
         assert!(
@@ -553,6 +635,28 @@ pub mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn tiles_cover_the_area() {
+        let t = tiles((0.0, 0.0, 1000.0, 450.0), 400.0);
+        assert_eq!(t.len(), 6);
+        assert_eq!(t[0], (0.0, 0.0, 400.0, 400.0));
+        assert_eq!(t[5], (800.0, 400.0, 1000.0, 450.0));
+        let area: f64 = t.iter().map(|(a, b, c, d)| (c - a) * (d - b)).sum();
+        assert_eq!(area, 450_000.0);
+        assert!(tiles((0.0, 0.0, 0.0, 10.0), 400.0).is_empty());
+    }
+
+    #[test]
+    fn mosaic_looks_up_the_right_tile() {
+        let a = grid(0.0, 10.0, 10, 10, 1.0, |_, _| 1.0);
+        let b = grid(10.0, 10.0, 10, 10, 0.5, |_, _| 2.0);
+        let m = Mosaic(vec![a, b]);
+        assert_eq!(m.at(5.0, 5.0), Some(1.0));
+        assert_eq!(m.at(12.0, 8.0), Some(2.0));
+        assert_eq!(m.at(25.0, 5.0), None);
+        assert_eq!(m.min_pixel(), 0.5);
     }
 
     #[test]
