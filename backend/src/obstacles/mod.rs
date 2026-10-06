@@ -124,7 +124,13 @@ pub async fn for_flight(
 
     match source {
         Source::Trees => {
-            let bbox = BBox::around(&points, MARGIN_M).expect("points not empty");
+            let centre = match (flight.meta.takeoff_lon, flight.meta.takeoff_lat) {
+                (Some(lon), Some(lat)) => (lon, lat),
+                _ => points[0],
+            };
+            let (near, _) = sources::within_radius(&points, centre, sources::RADIUS_M);
+            let near = if near.is_empty() { vec![centre] } else { near };
+            let bbox = BBox::around(&near, MARGIN_M).expect("points not empty");
             let data = sources::osm_trees(
                 cfg.overpass_url.as_deref().unwrap_or_default(),
                 bbox.clamp_size(MAX_TREES_SIDE_M),

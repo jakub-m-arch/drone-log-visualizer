@@ -95,6 +95,8 @@ export interface ObstacleResponse {
     /** LiDAR only: number of tiles fetched, and whether the corridor was cut. */
     tiles?: number
     truncated?: boolean
+    /** LiDAR only: tiles skipped because GUGiK kept dropping the connection. */
+    failedTiles?: number
   }
 }
 

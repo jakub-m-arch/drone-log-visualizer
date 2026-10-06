@@ -261,6 +261,7 @@ async fn lidar_heights_become_blocks_relative_to_takeoff_ground() {
     // 150 m tiles within 50 m of the 120 m track: 3 columns x 2 rows.
     assert_eq!(v["data"]["tiles"], 6, "{}", v["data"]["tiles"]);
     assert_eq!(v["data"]["truncated"], false);
+    assert_eq!(v["data"]["failedTiles"], 0);
     assert_eq!(calls.wcs.load(Ordering::SeqCst), 12, "NMT + NMPT per tile");
     let f = v["data"]["features"].as_array().unwrap();
     assert!(!f.is_empty());

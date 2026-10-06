@@ -506,7 +506,12 @@
     <div class="obstacle-note">GUGiK is slow: about 1–3 min per tile. You can keep using the app; the result is cached.</div>
   {/if}
   {#if st.on && st.data?.data.truncated}
-    <div class="obstacle-note">Long flight: only the part nearest take-off was fetched.</div>
+    <div class="obstacle-note">Only the area within 500 m of take-off was fetched.</div>
+  {/if}
+  {#if st.on && st.data?.data.failedTiles}
+    <div class="obstacle-note">
+      {st.data.data.failedTiles} tile(s) skipped: GUGiK kept dropping the connection. ↻ tries again.
+    </div>
   {/if}
   {#if st.error}<div class="obstacle-error" title={st.error}>{st.error}</div>{/if}
 {/snippet}

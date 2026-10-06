@@ -141,7 +141,8 @@ drawn at an assumed 15 m canopy. Individual trees and power lines are not part
 of these tiles. Treat all of this as context, not as obstacle clearance data.
 
 Two more 3D layers are fetched **only when you switch them on** for a flight,
-by the server, for the flight's area plus 100 m, and then cached in SQLite:
+by the server, for the flight's area within 500 m of take-off, and then
+cached in SQLite:
 
 - **Trees (OSM):** `natural=tree` points from the
   [Overpass API](https://wiki.openstreetmap.org/wiki/Overpass_API), drawn with
@@ -152,8 +153,10 @@ by the server, for the flight's area plus 100 m, and then cached in SQLite:
   free of charge by GUGiK. Their difference is the real height of every tree,
   building and other object above ground — the layer shows *all* of them,
   coloured by height (low = green, tall = brown). Objects ≥ 2.5 m are drawn
-  as 1 m blocks. Only 150 m tiles within 50 m of the track are fetched (at
-  most 12, nearest to take-off first). GUGiK renders NMPT slowly — about
+  as 1 m blocks. Only the part of the track within 500 m of take-off is
+  covered: 150 m tiles within 50 m of it (at most 12, nearest to take-off
+  first). GUGiK often drops connections; requests are retried, and a tile
+  that still fails is skipped (the legend says how many) so the rest is kept. GUGiK renders NMPT slowly — about
   1–3 minutes per tile — so the server fetches in the background, the legend
   shows the progress, and the result is cached per flight; the ↻ button
   fetches it again. Coordinates are converted to PUWG 1992 (EPSG:2180);
