@@ -12,12 +12,13 @@ chrono = "0.4.45"
 crc64 = "2"
 dji-log-parser = "=0.5.7"
 hex = "0.4.3"
-reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls", "system-proxy"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["form", "json", "rustls", "system-proxy"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.11.0"
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
 thiserror = "2.0.21"
+tiff = "0.11"
 tokio = { version = "1.53.2", features = ["full"] }
 tower-http = { version = "0.7.1", features = ["fs", "trace", "limit"] }
 tracing = "0.1.44"

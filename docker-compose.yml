@@ -12,6 +12,9 @@ services:
       MAP_TILE_URL: ${MAP_TILE_URL:-https://tile.openstreetmap.org/{z}/{x}/{y}.png}
       MAP_TERRAIN_URL: ${MAP_TERRAIN_URL:-}
       MAP_VECTOR_TILES_URL: ${MAP_VECTOR_TILES_URL:-}
+      OVERPASS_URL: ${OVERPASS_URL:-}
+      GUGIK_NMT_URL: ${GUGIK_NMT_URL:-}
+      GUGIK_NMPT_URL: ${GUGIK_NMPT_URL:-}
       RUST_LOG: ${RUST_LOG:-info}
     volumes:
       - dji-data:/data

@@ -13,6 +13,8 @@ export interface AppConfig {
   terrainAttribution: string
   /** TileJSON URL of OpenMapTiles vector tiles for 3D buildings/woods, or null. */
   vectorTilesUrl: string | null
+  /** Which on-demand obstacle sources the server has enabled. */
+  obstacleSources: { trees: boolean; lidar: boolean }
 }
 
 export interface FlightSummary {
@@ -77,6 +79,22 @@ export interface Telemetry {
   isRecording: boolean[]
 }
 
+export type ObstacleSource = 'trees' | 'lidar'
+
+export interface ObstacleResponse {
+  source: ObstacleSource
+  fetchedAt: string
+  cached: boolean
+  data: {
+    type: 'FeatureCollection'
+    features: {
+      type: 'Feature'
+      properties: { height: number | null; crown?: number | null; groundRel?: number }
+      geometry: { type: 'Point'; coordinates: [number, number] } | { type: 'Polygon'; coordinates: [number, number][][] }
+    }[]
+  }
+}
+
 export interface UploadResult {
   created: boolean
   /** An already imported flight was refreshed by a newer parser version. */
@@ -123,6 +141,8 @@ export const api = {
   flight: (id: number) => request<FlightDetail>(`/api/flights/${id}`),
   telemetry: (id: number) => request<Telemetry>(`/api/flights/${id}/telemetry`),
   deleteFlight: (id: number) => request<void>(`/api/flights/${id}`, { method: 'DELETE' }),
+  obstacles: (id: number, source: ObstacleSource, refresh = false) =>
+    request<ObstacleResponse>(`/api/flights/${id}/obstacles/${source}${refresh ? '?refresh=true' : ''}`),
   exportUrl: (id: number, format: 'csv' | 'gpx' | 'kml') => `/api/flights/${id}/export/${format}`,
 
   /** Uploads a log with progress reporting (fetch has no upload progress). */

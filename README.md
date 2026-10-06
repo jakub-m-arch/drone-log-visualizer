@@ -16,7 +16,9 @@ Runs locally as a single Docker container; your logs never leave your machine
     video-recording sections are marked
   - 3D view: the track as a ribbon at its real height with a curtain down to
     the ground, over terrain (free AWS Terrain Tiles, no key) or flat ground,
-    with 3D buildings and woods from OpenStreetMap (free OpenFreeMap tiles)
+    with 3D buildings and woods from OpenStreetMap (free OpenFreeMap tiles);
+    on demand, single trees from OSM and — for flights in Poland — real object
+    heights from GUGiK airborne laser scanning
   - timeline slider and playback (1×–50×) with the aircraft moving along the track
   - synchronized charts: height, horizontal/vertical speed, battery (% and V),
     GPS satellites, gimbal pitch, RC signal — drag to zoom, click to jump;
@@ -117,6 +119,8 @@ Set in `.env` (read by `docker compose`) or as container environment variables.
 | `MAP_TERRAIN_ENCODING` | `terrarium` | `terrarium` or `mapbox` (Terrain-RGB) |
 | `MAP_TERRAIN_ATTRIBUTION` | Mapzen | Attribution HTML for the elevation data |
 | `MAP_VECTOR_TILES_URL` | OpenFreeMap | TileJSON of OpenMapTiles-schema vector tiles for 3D buildings and woods; `off` disables them |
+| `OVERPASS_URL` | overpass-api.de | Overpass API endpoint for OSM trees; `off` disables the layer |
+| `GUGIK_NMT_URL` / `GUGIK_NMPT_URL` | GUGiK WCS | GeoTIFF request templates for terrain (NMT) and surface (NMPT) models, with `{minE} {minN} {maxE} {maxN}` in EPSG:2180; `off` disables the LiDAR layer |
 | `RUST_LOG` | `info` | Log level |
 
 The default map uses the public OpenStreetMap tile servers, which is fine for
@@ -135,6 +139,25 @@ heights are OSM `height` / `building:levels` where mapped; many buildings
 have no height in OSM and get a 6 m default. Woods have no height data and are
 drawn at an assumed 15 m canopy. Individual trees and power lines are not part
 of these tiles. Treat all of this as context, not as obstacle clearance data.
+
+Two more 3D layers are fetched **only when you switch them on** for a flight,
+by the server, for the flight's area plus 100 m, and then cached in SQLite:
+
+- **Trees (OSM):** `natural=tree` points from the
+  [Overpass API](https://wiki.openstreetmap.org/wiki/Overpass_API), drawn with
+  the mapped `height` / `diameter_crown` or a 10 m / 5 m default. Coverage
+  differs a lot between places.
+- **LiDAR heights (GUGiK), Poland only:** the national terrain (NMT) and
+  surface (NMPT) models from airborne laser scanning, published free of charge
+  by GUGiK. Their difference is the real height of every tree, building and
+  other object above ground; it is drawn as 1 m blocks (objects ≥ 2.5 m, area
+  up to 1.5 × 1.5 km). Coordinates are converted to PUWG 1992 (EPSG:2180).
+  The default request templates point at GUGiK's WCS services and **have not
+  been verified against the live service yet**; if GUGiK answers with an
+  error, the message is shown in the map legend, and `GUGIK_NMT_URL` /
+  `GUGIK_NMPT_URL` can be adjusted without code changes.
+
+Both requests reveal the flight's area to the respective service.
 
 ## Supported logs and errors
 

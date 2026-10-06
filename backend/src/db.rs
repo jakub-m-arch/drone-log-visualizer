@@ -381,3 +381,40 @@ pub async fn delete_keychains(pool: &SqlitePool, request_sha256: &str) -> AppRes
         .await?;
     Ok(())
 }
+
+/// Cached obstacle GeoJSON for a flight and source, with its fetch time.
+pub async fn cached_obstacles(
+    pool: &SqlitePool,
+    flight_id: i64,
+    source: &str,
+) -> AppResult<Option<(String, String)>> {
+    let row = sqlx::query(
+        "SELECT geojson, fetched_at FROM flight_obstacles WHERE flight_id = ? AND source = ?",
+    )
+    .bind(flight_id)
+    .bind(source)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| (r.get(0), r.get(1))))
+}
+
+pub async fn store_obstacles(
+    pool: &SqlitePool,
+    flight_id: i64,
+    source: &str,
+    geojson: &str,
+) -> AppResult<String> {
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        "INSERT INTO flight_obstacles (flight_id, source, geojson, fetched_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT (flight_id, source) DO UPDATE SET geojson = excluded.geojson,
+            fetched_at = excluded.fetched_at",
+    )
+    .bind(flight_id)
+    .bind(source)
+    .bind(geojson)
+    .bind(&now)
+    .execute(pool)
+    .await?;
+    Ok(now)
+}

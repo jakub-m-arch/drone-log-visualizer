@@ -11,7 +11,8 @@
   // MapLibre resolves its worker next to its own module, which breaks once
   // bundled; let Vite build the worker (and its imports) as a separate chunk.
   import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
-  import type { AppConfig, FlightSummary, Telemetry } from '../lib/api'
+  import { api, ApiError, type AppConfig, type FlightSummary, type ObstacleResponse, type ObstacleSource, type Telemetry } from '../lib/api'
+  import { lidarExtrusions, treeExtrusions } from '../lib/obstacles3d'
   import { bounds, pointsUpTo, trackPoints, type LngLat } from '../lib/geo'
   import {
     coloredTrack,
@@ -100,6 +101,54 @@
     applyObjects()
   }
 
+  // ---- On-demand obstacle layers (fetched only when switched on) ----------
+  interface ObstacleState {
+    on: boolean
+    loading: boolean
+    error: string | null
+    data: ObstacleResponse | null
+  }
+  const blank = (): ObstacleState => ({ on: false, loading: false, error: null, data: null })
+  let obstacles = $state<Record<ObstacleSource, ObstacleState>>({ trees: blank(), lidar: blank() })
+  const inPoland = $derived.by(() => {
+    const p = track.coords[0]
+    return !!p && p[0] >= 13.9 && p[0] <= 24.4 && p[1] >= 48.9 && p[1] <= 55.1
+  })
+  const OBSTACLE_LAYER: Record<ObstacleSource, string> = { trees: 'trees3d', lidar: 'lidar3d' }
+
+  function renderObstacles(source: ObstacleSource) {
+    if (!map || !ready) return
+    const st = obstacles[source]
+    const features = st.data
+      ? source === 'trees'
+        ? treeExtrusions(st.data)
+        : lidarExtrusions(st.data, hasTerrain)
+      : []
+    ;(map.getSource(OBSTACLE_LAYER[source]) as GeoJSONSource | undefined)?.setData({
+      type: 'FeatureCollection',
+      features,
+    })
+    map.setLayoutProperty(OBSTACLE_LAYER[source], 'visibility', is3d && st.on ? 'visible' : 'none')
+  }
+
+  async function toggleObstacle(source: ObstacleSource, on: boolean, refresh = false) {
+    const st = obstacles[source]
+    st.on = on
+    st.error = null
+    if (on && (!st.data || refresh)) {
+      st.loading = true
+      try {
+        st.data = await api.obstacles(flight.id, source, refresh)
+      } catch (e) {
+        st.error = e instanceof ApiError ? e.message : String(e)
+        st.on = false
+      } finally {
+        st.loading = false
+      }
+    }
+    renderObstacles(source)
+  }
+
   function applyObjects() {
     if (!map || !ready || !hasObjects) return
     for (const { kind, layer } of objectLayers()) {
@@ -167,6 +216,8 @@
     const vis = is3d ? 'visible' : 'none'
     for (const id of ['ribbon', 'curtain', 'drone3d']) m.setLayoutProperty(id, 'visibility', vis)
     applyObjects()
+    renderObstacles('trees')
+    renderObstacles('lidar')
     if (m.getLayer('hillshade')) m.setLayoutProperty('hillshade', 'visibility', vis)
     if (hasTerrain) m.setTerrain(is3d ? { source: 'dem', exaggeration: 1 } : null)
     // The 2D arrow would sit on the ground; in 3D the floating box replaces it.
@@ -339,6 +390,10 @@
             'fill-extrusion-opacity': opacity,
           },
         })
+      m.addSource('trees3d', { type: 'geojson', data: empty })
+      m.addSource('lidar3d', { type: 'geojson', data: empty })
+      extrusion('lidar3d', 0.7)
+      extrusion('trees3d', 0.8)
       extrusion('curtain', 0.25)
       extrusion('ribbon', 0.95)
       extrusion('drone3d', 1)
@@ -411,6 +466,22 @@
   })
 </script>
 
+{#snippet obstacleRow(source: ObstacleSource, label: string, title: string)}
+  {@const st = obstacles[source]}
+  <label {title}>
+    <input
+      type="checkbox"
+      checked={st.on}
+      disabled={st.loading}
+      onchange={(e) => toggleObstacle(source, e.currentTarget.checked)}
+    />
+    {label}
+    {#if st.loading}<span class="muted">· loading…</span>
+    {:else if st.on && st.data}<span class="muted">· {st.data.data.features.length}</span>{/if}
+  </label>
+  {#if st.error}<div class="obstacle-error" title={st.error}>{st.error}</div>{/if}
+{/snippet}
+
 <div class="map" bind:this={container}>
   {#if !track.coords.length}
     <div class="nogps">This flight has no GPS positions.</div>
@@ -424,6 +495,16 @@
         <div class="muted hint">
           {hasTerrain ? 'Terrain on' : 'Flat ground'} · right-drag / Ctrl+drag to tilt
         </div>
+        {#if config.obstacleSources.trees || (config.obstacleSources.lidar && inPoland)}
+          <div class="obstacles">
+            {#if config.obstacleSources.trees}
+              {@render obstacleRow('trees', 'Trees (OSM)', 'Single trees mapped in OpenStreetMap, fetched from the Overpass API for this flight\'s area')}
+            {/if}
+            {#if config.obstacleSources.lidar && inPoland}
+              {@render obstacleRow('lidar', 'LiDAR heights (GUGiK)', 'Real heights of trees, buildings and other objects from Polish airborne laser scanning (NMPT − NMT), fetched from GUGiK for this flight\'s area')}
+            {/if}
+          </div>
+        {/if}
         {#if hasObjects}
           <div class="objects">
             <label title="Heights from OpenStreetMap; buildings without data use a default">
@@ -536,6 +617,20 @@
     background: var(--accent);
     border-color: var(--accent);
     color: var(--accent-contrast);
+  }
+  .obstacles {
+    display: grid;
+    gap: 0.15rem;
+  }
+  .obstacles label {
+    justify-content: flex-start;
+    gap: 0.25rem;
+    color: var(--text);
+  }
+  .obstacle-error {
+    color: var(--error);
+    font-size: 0.7rem;
+    max-width: 230px;
   }
   .objects {
     display: flex;

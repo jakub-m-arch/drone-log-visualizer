@@ -6,6 +6,7 @@ pub mod export;
 pub mod flight;
 pub mod ingest;
 pub mod keychain;
+pub mod obstacles;
 pub mod synthetic;
 
 use axum::Router;
