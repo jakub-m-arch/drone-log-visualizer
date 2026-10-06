@@ -157,6 +157,31 @@ pub fn fill_template(template: &str, (min_e, min_n, max_e, max_n): (f64, f64, f6
         .replace("{maxN}", &format!("{max_n:.1}"))
 }
 
+/// Short plain-text summary of an error body: HTML tags and whitespace
+/// collapsed (Apache error pages repeat the status), capped at 200 chars.
+pub fn summarize_body(bytes: &[u8]) -> String {
+    let raw = String::from_utf8_lossy(&bytes[..bytes.len().min(4000)]);
+    let mut text = String::new();
+    let mut in_tag = false;
+    for ch in raw.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => {
+                in_tag = false;
+                text.push(' ');
+            }
+            c if !in_tag => text.push(c),
+            _ => {}
+        }
+    }
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.chars().count() > 200 {
+        format!("{}…", text.chars().take(200).collect::<String>())
+    } else {
+        text
+    }
+}
+
 async fn fetch_grid(service: &str, url: &str) -> AppResult<raster::Grid> {
     let res = client()
         .get(url)
@@ -166,9 +191,14 @@ async fn fetch_grid(service: &str, url: &str) -> AppResult<raster::Grid> {
     let status = res.status();
     let bytes = res.bytes().await.map_err(|e| upstream(service, e))?;
     if !status.is_success() {
-        let text = String::from_utf8_lossy(&bytes[..bytes.len().min(300)]).to_string();
+        let text = summarize_body(&bytes);
         return Err(AppError::Upstream(format!(
-            "{service} returned HTTP {status}: {text}"
+            "{service} returned HTTP {status}{}",
+            if text.is_empty() {
+                String::new()
+            } else {
+                format!(": {text}")
+            }
         )));
     }
     raster::read_geotiff(&bytes).map_err(|e| {
@@ -213,10 +243,15 @@ pub async fn gugik_lidar(req: LidarRequest<'_>) -> AppResult<Value> {
         fill_template(req.dtm_template, area),
         fill_template(req.dsm_template, area),
     );
-    let (dtm, dsm) = tokio::try_join!(
+    // Both requests run to completion so an error names every failing service.
+    let (dtm, dsm) = match tokio::join!(
         fetch_grid("GUGiK NMT", &dtm_url),
         fetch_grid("GUGiK NMPT", &dsm_url),
-    )?;
+    ) {
+        (Ok(dtm), Ok(dsm)) => (dtm, dsm),
+        (Err(e), Ok(_)) | (Ok(_), Err(e)) => return Err(e),
+        (Err(a), Err(b)) => return Err(AppError::Upstream(format!("{a}; {b}"))),
+    };
 
     let (re, rn) = puwg92::forward(req.reference.0, req.reference.1);
     let reference_ground = dtm.at(re, rn).map(f64::from).unwrap_or_else(|| {
@@ -293,6 +328,16 @@ mod tests {
         let w_m = (small.east - small.west) * 111_320.0 * 52.0f64.to_radians().cos();
         assert!((w_m - 200.0).abs() < 1.0, "{w_m}");
         assert!(BBox::around(&[], 10.0).is_none());
+    }
+
+    #[test]
+    fn error_bodies_are_summarized() {
+        let html = br#"<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML 2.0//EN"> <html><head> <title>404 Not Found</title> </head><body> <h1>Not Found</h1> <p>The requested URL was not found on this server.</p></body></html>"#;
+        assert_eq!(
+            summarize_body(html),
+            "404 Not Found Not Found The requested URL was not found on this server."
+        );
+        assert_eq!(summarize_body(b""), "");
     }
 
     #[test]
