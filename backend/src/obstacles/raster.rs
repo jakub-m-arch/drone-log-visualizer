@@ -142,8 +142,8 @@ pub fn read_geotiff(bytes: &[u8]) -> Result<Grid, String> {
 /// `yllcorner|yllcenter`, `cellsize` or `dx`/`dy`, optional `nodata_value`,
 /// then rows from north to south).
 ///
-/// The georeference is returned as written; see [`orient`] for grids that
-/// are served northing-first.
+/// The georeference is returned as written (GUGiK serves EPSG:2180 grids
+/// easting-first and north-up, like GDAL).
 pub fn read_aaigrid(bytes: &[u8], expected: (f64, f64, f64, f64)) -> Result<Grid, String> {
     let text =
         std::str::from_utf8(bytes).map_err(|_| "ASCII grid is not valid UTF-8".to_string())?;
@@ -209,38 +209,23 @@ pub fn read_aaigrid(bytes: &[u8], expected: (f64, f64, f64, f64)) -> Result<Grid
     })
 }
 
-/// Fixes grids served "northing-first" for EPSG:2180.
-///
-/// GUGiK writes both GeoTIFF and ASCII grids with the georeference axes
-/// swapped *and* the raster transposed: columns run north (from the minimum
-/// northing), rows run east (row 0 = maximum easting). Such a grid is detected
-/// by comparing its lower-left corner with the requested box
-/// (min E, min N, max E, max N) and transposed into north-up, easting columns.
-pub fn orient(g: Grid, expected: (f64, f64, f64, f64)) -> Grid {
-    let (min_e, min_n, _, _) = expected;
-    let bottom = g.top - g.height as f64 * g.py;
-    let normal = (g.left - min_e).abs() + (bottom - min_n).abs();
-    let swapped = (g.left - min_n).abs() + (bottom - min_e).abs();
-    if normal <= swapped {
-        return g;
-    }
-    let (w, h) = (g.height, g.width);
-    let mut data = vec![f32::NAN; w * h];
-    for row in 0..g.height {
-        for col in 0..g.width {
-            let (r, c) = (g.width - 1 - col, g.height - 1 - row);
-            data[r * w + c] = g.data[row * g.width + col];
-        }
-    }
-    Grid {
-        width: w,
-        height: h,
-        left: bottom,
-        top: g.left + g.width as f64 * g.px,
-        px: g.py,
-        py: g.px,
-        data,
-        nodata: g.nodata,
+/// Fraction (0..1) of the requested box (min E, min N, max E, max N) that
+/// the grid covers. Used to reject data for the wrong area, e.g. when a
+/// request template has the subset axes the wrong way round.
+pub fn coverage(g: &Grid, area: (f64, f64, f64, f64)) -> f64 {
+    let (min_e, min_n, max_e, max_n) = area;
+    let (g_e0, g_n1) = (g.left, g.top);
+    let (g_e1, g_n0) = (
+        g.left + g.width as f64 * g.px,
+        g.top - g.height as f64 * g.py,
+    );
+    let w = (max_e.min(g_e1) - min_e.max(g_e0)).max(0.0);
+    let h = (max_n.min(g_n1) - min_n.max(g_n0)).max(0.0);
+    let total = (max_e - min_e) * (max_n - min_n);
+    if total <= 0.0 {
+        0.0
+    } else {
+        (w * h / total).min(1.0)
     }
 }
 
@@ -342,7 +327,7 @@ pub fn read_grid(bytes: &[u8], expected: (f64, f64, f64, f64)) -> Result<Grid, S
 
 fn read_single_grid(bytes: &[u8], expected: (f64, f64, f64, f64)) -> Result<Grid, String> {
     if bytes.starts_with(b"II*\0") || bytes.starts_with(b"MM\0*") {
-        read_geotiff(bytes).map(|g| orient(g, expected))
+        read_geotiff(bytes)
     } else if bytes
         .iter()
         .skip_while(|b| b.is_ascii_whitespace())
@@ -350,7 +335,7 @@ fn read_single_grid(bytes: &[u8], expected: (f64, f64, f64, f64)) -> Result<Grid
         .map(|b| b.to_ascii_lowercase())
         .eq(b"ncols".iter().copied())
     {
-        read_aaigrid(bytes, expected).map(|g| orient(g, expected))
+        read_aaigrid(bytes, expected)
     } else {
         let head: Vec<String> = bytes.iter().take(8).map(|b| format!("{b:02x}")).collect();
         Err(format!(
@@ -548,22 +533,6 @@ pub mod tests {
     }
 
     #[test]
-    fn ascii_grid_northing_first_is_transposed() {
-        // Same 3 (E) × 2 (N) area served with x = northing, y = easting:
-        // 2 columns (north), 3 rows (east, first row = easternmost).
-        // Value = 10 * east_index + north_index (from SW).
-        let text = b"ncols 2\nnrows 3\nxllcenter 2000.5\nyllcenter 1000.5\ncellsize 1\n20 21\n10 11\n0 1\n";
-        let g = read_grid(text, (1000.0, 2000.0, 1003.0, 2002.0)).unwrap();
-        assert_eq!((g.width, g.height, g.left, g.top), (3, 2, 1000.0, 2002.0));
-        for e in 0..3 {
-            for n in 0..2 {
-                let v = g.at(1000.5 + e as f64, 2000.5 + n as f64).unwrap();
-                assert_eq!(v, (10 * e + n) as f32, "e={e} n={n}");
-            }
-        }
-    }
-
-    #[test]
     fn wcs_multipart_responses_are_unpacked() {
         let body = b"--wcs\r\nContent-Type: text/xml\r\nContent-ID: wcs\r\n\r\n<gml:RectifiedGridCoverage/>\r\n--wcs\r\nContent-Type: image/x-aaigrid\r\nContent-Description: coverage data\r\nContent-Transfer-Encoding: binary\r\nContent-ID: coverage/out.asc\r\n\r\nncols 2\nnrows 1\nxllcorner 1000\nyllcorner 2000\ncellsize 1\n7 8\n\r\n--wcs--\r\n";
         let parts = multipart_parts(body).unwrap();
@@ -604,25 +573,18 @@ pub mod tests {
     }
 
     #[test]
-    fn northing_first_geotiff_is_transposed() {
-        // Exactly what GUGiK's NMT returned for 100 m (N) × 200 m (E) at 1 m:
-        // 100 × 200 px, tiepoint (486700 = min N, 637500 = max E).
-        // Value = 1000 * east_index + north_index (from the SW corner).
-        let served = grid(486_700.0, 637_500.0, 100, 200, 1.0, |col, row| {
-            (1000 * (199 - row) + col) as f32
-        });
-        let area = (637_300.0, 486_700.0, 637_500.0, 486_800.0);
-        let g = read_grid(&encode_geotiff(&served), area).unwrap();
-        assert_eq!((g.width, g.height), (200, 100));
-        assert_eq!((g.left, g.top), (637_300.0, 486_800.0));
-        assert_eq!(g.at(637_300.5, 486_700.5), Some(0.0)); // SW
-        assert_eq!(g.at(637_499.5, 486_700.5), Some(199_000.0)); // SE
-        assert_eq!(g.at(637_300.5, 486_799.5), Some(99.0)); // NW
-        assert_eq!(g.at(637_412.5, 486_733.5), Some(112_033.0));
-        // A normal (easting-first) grid is left alone.
-        let normal = grid(637_300.0, 486_800.0, 200, 100, 1.0, |_, _| 1.0);
-        let g = read_grid(&encode_geotiff(&normal), area).unwrap();
-        assert_eq!((g.width, g.left), (200, 637_300.0));
+    fn coverage_of_requested_area() {
+        let g = grid(636_830.0, 487_070.0, 200, 150, 1.0, |_, _| 0.0);
+        assert_eq!(
+            coverage(&g, (636_830.0, 486_920.0, 637_030.0, 487_070.0)),
+            1.0
+        );
+        assert!((coverage(&g, (636_930.0, 486_920.0, 637_130.0, 487_070.0)) - 0.5).abs() < 1e-9);
+        // Axes swapped: a completely different place.
+        assert_eq!(
+            coverage(&g, (486_920.0, 636_830.0, 487_070.0, 637_030.0)),
+            0.0
+        );
     }
 
     #[test]

@@ -92,7 +92,22 @@ export interface ObstacleResponse {
       properties: { height: number | null; crown?: number | null; groundRel?: number }
       geometry: { type: 'Point'; coordinates: [number, number] } | { type: 'Polygon'; coordinates: [number, number][][] }
     }[]
+    /** LiDAR only: number of tiles fetched, and whether the corridor was cut. */
+    tiles?: number
+    truncated?: boolean
   }
+}
+
+/** LiDAR is fetched in the background; the API answers 202 until it is done. */
+export interface ObstacleLoading {
+  source: ObstacleSource
+  status: 'loading'
+  done: number
+  total: number
+}
+
+export function isLoading(r: ObstacleResponse | ObstacleLoading): r is ObstacleLoading {
+  return (r as ObstacleLoading).status === 'loading'
 }
 
 export interface UploadResult {
@@ -142,7 +157,9 @@ export const api = {
   telemetry: (id: number) => request<Telemetry>(`/api/flights/${id}/telemetry`),
   deleteFlight: (id: number) => request<void>(`/api/flights/${id}`, { method: 'DELETE' }),
   obstacles: (id: number, source: ObstacleSource, refresh = false) =>
-    request<ObstacleResponse>(`/api/flights/${id}/obstacles/${source}${refresh ? '?refresh=true' : ''}`),
+    request<ObstacleResponse | ObstacleLoading>(
+      `/api/flights/${id}/obstacles/${source}${refresh ? '?refresh=true' : ''}`,
+    ),
   exportUrl: (id: number, format: 'csv' | 'gpx' | 'kml') => `/api/flights/${id}/export/${format}`,
 
   /** Uploads a log with progress reporting (fetch has no upload progress). */

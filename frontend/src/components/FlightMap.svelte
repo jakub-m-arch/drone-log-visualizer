@@ -11,7 +11,7 @@
   // MapLibre resolves its worker next to its own module, which breaks once
   // bundled; let Vite build the worker (and its imports) as a separate chunk.
   import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
-  import { api, ApiError, type AppConfig, type FlightSummary, type ObstacleResponse, type ObstacleSource, type Telemetry } from '../lib/api'
+  import { api, ApiError, isLoading, type AppConfig, type FlightSummary, type ObstacleResponse, type ObstacleSource, type Telemetry } from '../lib/api'
   import { lidarExtrusions, treeExtrusions } from '../lib/obstacles3d'
   import { bounds, pointsUpTo, trackPoints, type LngLat } from '../lib/geo'
   import {
@@ -107,8 +107,11 @@
     loading: boolean
     error: string | null
     data: ObstacleResponse | null
+    /** Background fetch progress (LiDAR tiles). */
+    progress: { done: number; total: number } | null
   }
-  const blank = (): ObstacleState => ({ on: false, loading: false, error: null, data: null })
+  const blank = (): ObstacleState => ({ on: false, loading: false, error: null, data: null, progress: null })
+  let destroyed = false
   let obstacles = $state<Record<ObstacleSource, ObstacleState>>({ trees: blank(), lidar: blank() })
   const inPoland = $derived.by(() => {
     const p = track.coords[0]
@@ -137,13 +140,23 @@
     st.error = null
     if (on && (!st.data || refresh)) {
       st.loading = true
+      st.progress = null
       try {
-        st.data = await api.obstacles(flight.id, source, refresh)
+        let res = await api.obstacles(flight.id, source, refresh)
+        // LiDAR runs on the server in the background: poll until it is ready.
+        while (isLoading(res)) {
+          st.progress = { done: res.done, total: res.total }
+          await new Promise((r) => setTimeout(r, 4000))
+          if (destroyed || !st.on) return
+          res = await api.obstacles(flight.id, source)
+        }
+        st.data = res
       } catch (e) {
         st.error = e instanceof ApiError ? e.message : String(e)
         st.on = false
       } finally {
         st.loading = false
+        st.progress = null
       }
     }
     renderObstacles(source)
@@ -427,6 +440,7 @@
     const ro = new ResizeObserver(() => m.resize())
     ro.observe(container)
     return () => {
+      destroyed = true
       ro.disconnect()
       m.remove()
       map = null
@@ -476,7 +490,9 @@
       onchange={(e) => toggleObstacle(source, e.currentTarget.checked)}
     />
     {label}
-    {#if st.loading}<span class="muted">· loading{source === 'lidar' ? ' (up to a few minutes)' : ''}…</span>
+    {#if st.loading}<span class="muted"
+        >· loading{st.progress && st.progress.total ? ` ${st.progress.done}/${st.progress.total} tiles` : ''}…</span
+      >
     {:else if st.on && st.data}<span class="muted">· {st.data.data.features.length}</span>{/if}
   </label>
   {#if st.on && st.data && !st.loading}
@@ -485,6 +501,12 @@
       title="Fetch again from the service (the result is cached per flight)"
       onclick={() => toggleObstacle(source, true, true)}>↻</button
     >
+  {/if}
+  {#if st.loading && source === 'lidar'}
+    <div class="obstacle-note">GUGiK is slow: about 1–3 min per tile. You can keep using the app; the result is cached.</div>
+  {/if}
+  {#if st.on && st.data?.data.truncated}
+    <div class="obstacle-note">Long flight: only the part nearest take-off was fetched.</div>
   {/if}
   {#if st.error}<div class="obstacle-error" title={st.error}>{st.error}</div>{/if}
 {/snippet}
@@ -639,6 +661,11 @@
     padding: 0 0.35rem;
     font-size: 0.7rem;
     margin-left: 1.2rem;
+  }
+  .obstacle-note {
+    color: var(--text-muted);
+    font-size: 0.7rem;
+    max-width: 230px;
   }
   .obstacle-error {
     color: var(--error);

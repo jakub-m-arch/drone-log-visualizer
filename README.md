@@ -147,18 +147,20 @@ by the server, for the flight's area plus 100 m, and then cached in SQLite:
   [Overpass API](https://wiki.openstreetmap.org/wiki/Overpass_API), drawn with
   the mapped `height` / `diameter_crown` or a 10 m / 5 m default. Coverage
   differs a lot between places.
-- **LiDAR heights (GUGiK), Poland only:** the national terrain (NMT) and
-  surface (NMPT) models from airborne laser scanning, published free of charge
-  by GUGiK. Their difference is the real height of every tree, building and
-  other object above ground; it is drawn as 1 m blocks (objects ≥ 2.5 m, area
-  up to 1 × 1 km, fetched as 400 m tiles; this can take a few minutes).
-  Coordinates are converted to PUWG 1992 (EPSG:2180); GUGiK serves both
-  models "northing-first" (transposed), which is detected and corrected.
-  The ↻ button next to a layer fetches it again.
-  The default requests use GUGiK's public WCS services (NMT
-  `DTM_PL-KRON86-NH_TIFF`, NMPT `DSM_PL-KRON86-NH`, both in the Kronsztadt 86
-  height datum). If GUGiK changes them, the error is shown in the map legend
-  and `GUGIK_NMT_URL` / `GUGIK_NMPT_URL` can be adjusted without code changes.
+- **LiDAR heights (GUGiK), Poland only:** the national terrain (NMT, 1 m)
+  and surface (NMPT, 0.5 m) models from airborne laser scanning, published
+  free of charge by GUGiK. Their difference is the real height of every tree,
+  building and other object above ground — the layer shows *all* of them,
+  coloured by height (low = green, tall = brown). Objects ≥ 2.5 m are drawn
+  as 1 m blocks. Only 150 m tiles within 50 m of the track are fetched (at
+  most 12, nearest to take-off first). GUGiK renders NMPT slowly — about
+  1–3 minutes per tile — so the server fetches in the background, the legend
+  shows the progress, and the result is cached per flight; the ↻ button
+  fetches it again. Coordinates are converted to PUWG 1992 (EPSG:2180);
+  grids that do not cover the requested area are rejected. Verified against
+  the Palace of Culture in Warsaw (234 m above ground at the spire). The
+  scans are several years old and often made without leaves, so recent or
+  deciduous trees can be missing or lower.
 
 Both requests reveal the flight's area to the respective service.
 

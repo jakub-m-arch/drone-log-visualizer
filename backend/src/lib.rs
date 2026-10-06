@@ -25,6 +25,8 @@ pub struct AppState {
     pub pool: SqlitePool,
     pub config: Arc<Config>,
     pub http: reqwest::Client,
+    /// Background LiDAR fetches, by flight id.
+    pub obstacle_jobs: obstacles::Jobs,
 }
 
 impl AppState {
@@ -33,6 +35,7 @@ impl AppState {
             pool,
             config: Arc::new(config),
             http: keychain::http_client(),
+            obstacle_jobs: Default::default(),
         }
     }
 }

@@ -57,47 +57,42 @@ async fn mock_services() -> (String, Calls) {
                 }
             }
             if surface {
-                // Like GUGiK's NMPT: an Arc/Info ASCII grid, here northing-first
-                // (columns run north, the first row is the easternmost).
+                // Like GUGiK's NMPT: an Arc/Info ASCII grid (easting-first,
+                // north-up) inside a WCS 2.0 multipart/related answer that
+                // starts with a line break.
                 let mut text = format!(
-                    "ncols {h}\nnrows {w}\nxllcorner {n0}\nyllcorner {e0}\ncellsize 1\nNODATA_value -9999\n"
+                    "ncols {w}\nnrows {h}\nxllcorner {e0}\nyllcorner {n0}\ncellsize 1\nNODATA_value -9999\n"
                 );
-                for col in (0..w).rev() {
-                    let row: Vec<String> = (0..h)
-                        .rev()
-                        .map(|r| data[r * w + col].to_string())
+                for r in 0..h {
+                    let row: Vec<String> = data[r * w..(r + 1) * w]
+                        .iter()
+                        .map(f32::to_string)
                         .collect();
                     text.push_str(&row.join(" "));
                     text.push('\n');
                 }
-                // Wrapped like GUGiK's WCS 2.0 multipart/related answer.
                 let body = format!(
-                    "--wcs\r\nContent-Type: text/xml\r\nContent-ID: wcs\r\n\r\n<gml:RectifiedGridCoverage/>\r\n\
-                     --wcs\r\nContent-Type: image/x-aaigrid\r\nContent-Description: coverage data\r\n\
-                     Content-Transfer-Encoding: binary\r\nContent-ID: coverage/out.asc\r\n\r\n{text}\r\n--wcs--\r\n"
+                    "\r\n--wcs\r\nContent-Type: image/x-aaigrid\r\nContent-Description: coverage data\r\n\
+                     Content-Transfer-Encoding: binary\r\nContent-ID: coverage/result.asc\r\n\r\n{text}\r\n\
+                     --wcs\r\nContent-Type: application/octet-stream\r\n\r\n<PAMDataset/>\r\n--wcs--\r\n"
                 );
                 return (
                     [("content-type", "multipart/related; boundary=wcs")],
                     body.into_bytes(),
                 );
             }
-            // Like GUGiK's NMT: a GeoTIFF with columns running north and rows
-            // running east (row 0 = max easting), tiepoint (min N, max E).
-            let mut swapped = vec![0.0f32; w * h];
-            for r in 0..h {
-                for col in 0..w {
-                    // (row r from north, col from west) -> (row from east, col from south)
-                    swapped[(w - 1 - col) * h + (h - 1 - r)] = data[r * w + col];
-                }
-            }
+            // Like GUGiK's NMT: a north-up float GeoTIFF. `swap=1` answers for
+            // the area with easting and northing exchanged, as a server would
+            // for a template with the subset axes the wrong way round.
+            let swap = q.get("swap") == Some(&1.0);
             let g = Grid {
-                width: h,
-                height: w,
-                left: n0,
-                top: e1,
+                width: w,
+                height: h,
+                left: if swap { n0 } else { e0 },
+                top: if swap { e1 } else { n1 },
                 px: 1.0,
                 py: 1.0,
-                data: swapped,
+                data,
                 nodata: None,
             };
             ([("content-type", "image/tiff")], encode_geotiff(&g))
@@ -186,6 +181,19 @@ async fn get_json(app: &Router, uri: &str) -> (StatusCode, Value) {
     send(app, Request::get(uri).body(Body::empty()).unwrap()).await
 }
 
+/// LiDAR runs in the background: poll while the API answers 202.
+async fn poll(app: &Router, uri: &str) -> (StatusCode, Value) {
+    for _ in 0..600 {
+        let (status, v) = get_json(app, uri).await;
+        if status != StatusCode::ACCEPTED {
+            return (status, v);
+        }
+        assert_eq!(v["status"], "loading", "{v}");
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    panic!("LiDAR job did not finish");
+}
+
 #[tokio::test]
 async fn osm_trees_are_fetched_once_and_cached() {
     let (base, calls) = mock_services().await;
@@ -237,9 +245,23 @@ async fn lidar_heights_become_blocks_relative_to_takeoff_ground() {
     let (base, calls) = mock_services().await;
     let (app, id) = setup(Some(&base)).await;
 
-    let (status, v) = get_json(&app, &format!("/api/flights/{id}/obstacles/lidar")).await;
-    assert_eq!(status, StatusCode::OK, "{v}");
-    assert_eq!(calls.wcs.load(Ordering::SeqCst), 2, "NMT + NMPT");
+    let uri = format!("/api/flights/{id}/obstacles/lidar");
+    let (status, v) = get_json(&app, &uri).await;
+    assert_eq!(
+        status,
+        StatusCode::ACCEPTED,
+        "the first request starts a background job"
+    );
+    let (status, v2) = poll(&app, &uri).await;
+    let v = if status == StatusCode::OK {
+        v2
+    } else {
+        panic!("{v}: {v2}")
+    };
+    // 150 m tiles within 50 m of the 120 m track: 3 columns x 2 rows.
+    assert_eq!(v["data"]["tiles"], 6, "{}", v["data"]["tiles"]);
+    assert_eq!(v["data"]["truncated"], false);
+    assert_eq!(calls.wcs.load(Ordering::SeqCst), 12, "NMT + NMPT per tile");
     let f = v["data"]["features"].as_array().unwrap();
     assert!(!f.is_empty());
     // Only the 15 m object, on ground level with the take-off point.
@@ -255,16 +277,38 @@ async fn lidar_heights_become_blocks_relative_to_takeoff_ground() {
         }
     }
 
-    let (_, v) = get_json(&app, &format!("/api/flights/{id}/obstacles/lidar")).await;
+    let (status, v) = get_json(&app, &uri).await;
+    assert_eq!(status, StatusCode::OK);
     assert_eq!(v["cached"], true);
-    assert_eq!(calls.wcs.load(Ordering::SeqCst), 2);
+    assert_eq!(calls.wcs.load(Ordering::SeqCst), 12);
+}
+
+#[tokio::test]
+async fn data_for_the_wrong_area_is_rejected() {
+    let (base, _) = mock_services().await;
+    let pool = db::connect_memory().await.unwrap();
+    let mut cfg = config(Some(&base));
+    cfg.gugik_nmt_url = Some(format!(
+        "{base}/nmt?e0={{minE}}&n0={{minN}}&e1={{maxE}}&n1={{maxN}}&swap=1"
+    ));
+    let app = app(AppState::new(pool, cfg));
+    let id = upload(&app).await;
+    let uri = format!("/api/flights/{id}/obstacles/lidar");
+    get_json(&app, &uri).await;
+    let (status, v) = poll(&app, &uri).await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY, "{v}");
+    let msg = v["error"]["message"].as_str().unwrap();
+    assert!(msg.contains("different area"), "{msg}");
+    // The failure is reported once; the next request starts a new attempt.
+    let (status, _) = get_json(&app, &uri).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
 }
 
 #[tokio::test]
 async fn disabled_and_unknown_sources() {
     let (app, id) = setup(None).await;
     let (status, v) = get_json(&app, &format!("/api/flights/{id}/obstacles/lidar")).await;
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{v}");
     assert_eq!(v["error"]["code"], "not_available");
     let (status, _) = get_json(&app, &format!("/api/flights/{id}/obstacles/pylons")).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -286,14 +330,14 @@ async fn upstream_failures_are_reported_and_not_cached() {
     assert_eq!(v["error"]["code"], "upstream_error");
     assert!(v["error"]["message"].as_str().unwrap().contains("Overpass"));
 
-    // GUGiK: both services named, with the cause, and nothing about DJI.
-    let (status, v) = get_json(&app, &format!("/api/flights/{id}/obstacles/lidar")).await;
+    // GUGiK: the failing service and tile are named, with the cause, and
+    // nothing about DJI.
+    let uri = format!("/api/flights/{id}/obstacles/lidar");
+    get_json(&app, &uri).await;
+    let (status, v) = poll(&app, &uri).await;
     assert_eq!(status, StatusCode::BAD_GATEWAY, "{v}");
     let msg = v["error"]["message"].as_str().unwrap();
-    assert!(
-        msg.contains("GUGiK NMT") && msg.contains("GUGiK NMPT"),
-        "{msg}"
-    );
+    assert!(msg.contains("GUGiK NMT (tile 1/"), "{msg}");
     assert!(msg.to_lowercase().contains("connect"), "{msg}");
     assert!(!msg.contains("DJI"), "{msg}");
 }
