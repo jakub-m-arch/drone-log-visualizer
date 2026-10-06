@@ -65,3 +65,15 @@ describe('camera overlays', () => {
     expect(photoPoints(t, track).map((p) => p.sample)).toEqual([2, 7])
   })
 })
+
+describe('pointColors', () => {
+  it('colors each point from low to high', async () => {
+    const { pointColors } = await import('./trackColor')
+    const t = tel(3)
+    const c = pointColors(t, trackPoints(t), 'height')!
+    expect(c).toHaveLength(3)
+    expect(c[0]).toBe('rgb(49, 54, 149)')
+    expect(c[2]).toBe('rgb(165, 0, 38)')
+    expect(pointColors(t, trackPoints(t), 'plain')).toBeNull()
+  })
+})

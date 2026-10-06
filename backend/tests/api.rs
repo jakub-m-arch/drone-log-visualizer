@@ -28,6 +28,10 @@ fn config(api_key: Option<&str>, endpoint: &str) -> Config {
         keychain_endpoint: endpoint.into(),
         map_tile_url: "https://tiles.example/{z}/{x}/{y}.png".into(),
         map_attribution: "test".into(),
+        terrain_url: None,
+        terrain_encoding: "terrarium".into(),
+        terrain_attribution: "test".into(),
+        vector_tiles_url: None,
     }
 }
 
@@ -346,6 +350,9 @@ async fn config_reports_key_presence_but_never_the_key() {
     assert_eq!(body["apiKeyConfigured"], true);
     assert_eq!(body["supportedLogVersions"]["max"], 14);
     assert!(!body.to_string().contains(GOOD_KEY));
+
+    let (_, _, headers) = send(&app, get("/api/config")).await;
+    assert_eq!(headers["cache-control"], "no-cache");
 
     let (status, body) = send_json(&app, get("/api/nope")).await;
     assert_eq!(status, StatusCode::NOT_FOUND);

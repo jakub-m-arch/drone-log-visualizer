@@ -47,6 +47,10 @@ async fn config(State(state): State<AppState>) -> Json<serde_json::Value> {
         "maxUploadMb": c.max_upload_bytes / 1024 / 1024,
         "mapTileUrl": c.map_tile_url,
         "mapAttribution": c.map_attribution,
+        "terrainUrl": c.terrain_url,
+        "terrainEncoding": c.terrain_encoding,
+        "terrainAttribution": c.terrain_attribution,
+        "vectorTilesUrl": c.vector_tiles_url,
     }))
 }
 

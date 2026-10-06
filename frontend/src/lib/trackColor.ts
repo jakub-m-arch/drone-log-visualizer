@@ -145,3 +145,22 @@ export function photoPoints(tel: Telemetry, track: { idx: number[]; coords: LngL
   })
   return pts
 }
+
+/** One color per track point for the chosen mode; null for plain mode / no data. */
+export function pointColors(
+  tel: Telemetry,
+  track: { idx: number[]; coords: LngLat[] },
+  mode: ColorMode,
+): string[] | null {
+  const values = series(tel, mode)
+  if (!values) return null
+  const known = track.idx.map((i) => values[i]).filter((v): v is number => v !== null && Number.isFinite(v))
+  if (!known.length) return null
+  const min = mode === 'battery' ? Math.min(0, ...known) : Math.min(...known)
+  const max = mode === 'battery' ? 100 : Math.max(...known)
+  const ramp = rampFor(mode)
+  return track.idx.map((i) => {
+    const v = values[i]
+    return v === null || !Number.isFinite(v) ? 'rgb(140, 140, 140)' : rampColor(ramp, (v - min) / (max - min || 1))
+  })
+}

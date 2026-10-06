@@ -22,6 +22,12 @@ impl fmt::Debug for ApiKey {
     }
 }
 
+pub const DEFAULT_TERRAIN_URL: &str =
+    "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
+
+/// OpenFreeMap: free OpenMapTiles-schema vector tiles, no key.
+pub const DEFAULT_VECTOR_TILES_URL: &str = "https://tiles.openfreemap.org/planet";
+
 pub const DEFAULT_KEYCHAIN_ENDPOINT: &str =
     "https://dev.dji.com/openapi/v1/flight-records/keychains";
 
@@ -35,6 +41,14 @@ pub struct Config {
     pub keychain_endpoint: String,
     pub map_tile_url: String,
     pub map_attribution: String,
+    /// Raster DEM tiles for the 3D view; `None` = flat 3D without terrain.
+    pub terrain_url: Option<String>,
+    /// `terrarium` or `mapbox` (Terrain-RGB) encoding of `terrain_url`.
+    pub terrain_encoding: String,
+    pub terrain_attribution: String,
+    /// TileJSON URL of OpenMapTiles-schema vector tiles used for 3D buildings
+    /// and woods; `None` disables them.
+    pub vector_tiles_url: Option<String>,
 }
 
 impl Config {
@@ -62,6 +76,29 @@ impl Config {
                 .unwrap_or_else(|| DEFAULT_KEYCHAIN_ENDPOINT.into()),
             map_tile_url: var("MAP_TILE_URL")
                 .unwrap_or_else(|| "https://tile.openstreetmap.org/{z}/{x}/{y}.png".into()),
+            // Public AWS Open Data terrain tiles; set MAP_TERRAIN_URL=off to disable.
+            terrain_url: match var("MAP_TERRAIN_URL") {
+                Some(v) if v.eq_ignore_ascii_case("off") => None,
+                Some(v) => Some(v),
+                None => Some(DEFAULT_TERRAIN_URL.into()),
+            },
+            terrain_encoding: match var("MAP_TERRAIN_ENCODING") {
+                Some(v) if v == "terrarium" || v == "mapbox" => v,
+                Some(v) => {
+                    return Err(format!(
+                        "MAP_TERRAIN_ENCODING must be terrarium or mapbox, got {v:?}"
+                    ));
+                }
+                None => "terrarium".into(),
+            },
+            vector_tiles_url: match var("MAP_VECTOR_TILES_URL") {
+                Some(v) if v.eq_ignore_ascii_case("off") => None,
+                Some(v) => Some(v),
+                None => Some(DEFAULT_VECTOR_TILES_URL.into()),
+            },
+            terrain_attribution: var("MAP_TERRAIN_ATTRIBUTION").unwrap_or_else(|| {
+                "Elevation: <a href=\"https://github.com/tilezen/joerd/blob/master/docs/attribution.md\">Mapzen Terrain Tiles</a>".into()
+            }),
             map_attribution: var("MAP_ATTRIBUTION").unwrap_or_else(|| {
                 "© <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap</a> contributors"
                     .into()
