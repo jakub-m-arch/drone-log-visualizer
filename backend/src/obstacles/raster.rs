@@ -189,6 +189,12 @@ pub fn read_aaigrid(bytes: &[u8], expected: (f64, f64, f64, f64)) -> Result<Grid
 /// boundary is taken from the first line (`--boundary`). Returns the part
 /// bodies, or `None` if the body is not multipart.
 pub fn multipart_parts(bytes: &[u8]) -> Option<Vec<&[u8]>> {
+    // Servers may send a preamble line break (or a BOM) before the first boundary.
+    let skip = bytes
+        .iter()
+        .position(|b| !b.is_ascii_whitespace() && *b != 0xEF && *b != 0xBB && *b != 0xBF)
+        .unwrap_or(bytes.len());
+    let bytes = &bytes[skip..];
     if !bytes.starts_with(b"--") {
         return None;
     }
@@ -208,6 +214,7 @@ pub fn multipart_parts(bytes: &[u8]) -> Option<Vec<&[u8]>> {
             .map(|i| i + 4)
             .or_else(|| find(part, b"\n\n").map(|i| i + 2));
         if let Some(start) = body_start {
+            let headers = String::from_utf8_lossy(&part[..start]).to_ascii_lowercase();
             let mut body = &part[start..];
             // Drop the line break that precedes the next boundary.
             if body.ends_with(b"\r\n") {
@@ -215,7 +222,12 @@ pub fn multipart_parts(bytes: &[u8]) -> Option<Vec<&[u8]>> {
             } else if body.ends_with(b"\n") {
                 body = &body[..body.len() - 1];
             }
-            parts.push(body);
+            // Data parts (image/*) first, descriptions (XML) after.
+            if headers.contains("content-type: image/") {
+                parts.insert(0, body);
+            } else {
+                parts.push(body);
+            }
         }
         match next {
             Some(n) => {
@@ -280,7 +292,11 @@ fn read_single_grid(bytes: &[u8], expected: (f64, f64, f64, f64)) -> Result<Grid
     {
         read_aaigrid(bytes, expected)
     } else {
-        Err("the response is neither a GeoTIFF nor an ASCII grid".into())
+        let head: Vec<String> = bytes.iter().take(8).map(|b| format!("{b:02x}")).collect();
+        Err(format!(
+            "the response is neither a GeoTIFF nor an ASCII grid (first bytes: {})",
+            head.join(" ")
+        ))
     }
 }
 
@@ -492,7 +508,9 @@ pub mod tests {
         let body = b"--wcs\r\nContent-Type: text/xml\r\nContent-ID: wcs\r\n\r\n<gml:RectifiedGridCoverage/>\r\n--wcs\r\nContent-Type: image/x-aaigrid\r\nContent-Description: coverage data\r\nContent-Transfer-Encoding: binary\r\nContent-ID: coverage/out.asc\r\n\r\nncols 2\nnrows 1\nxllcorner 1000\nyllcorner 2000\ncellsize 1\n7 8\n\r\n--wcs--\r\n";
         let parts = multipart_parts(body).unwrap();
         assert_eq!(parts.len(), 2);
-        assert_eq!(parts[0], b"<gml:RectifiedGridCoverage/>");
+        // The image/* part comes first, the XML description after it.
+        assert!(parts[0].starts_with(b"ncols"));
+        assert_eq!(parts[1], b"<gml:RectifiedGridCoverage/>");
         let g = read_grid(body, (1000.0, 2000.0, 1002.0, 2001.0)).unwrap();
         assert_eq!(g.at(1001.5, 2000.5), Some(8.0));
 
@@ -513,6 +531,16 @@ pub mod tests {
         .unwrap_err();
         assert!(err.contains("no elevation grid"), "{err}");
         assert!(multipart_parts(b"ncols 1").is_none());
+
+        // Preamble line break before the first boundary; data part listed
+        // second in the body but tried first.
+        let body = b"\r\n--wcs\r\nContent-Type: text/xml\r\n\r\n<gml/>\r\n--wcs\r\nContent-Type: image/x-aaigrid\r\n\r\nncols 1\nnrows 1\nxllcorner 0\nyllcorner 0\ncellsize 1\n9\r\n--wcs--\r\n";
+        let parts = multipart_parts(body).unwrap();
+        assert!(parts[0].starts_with(b"ncols"));
+        assert_eq!(
+            read_grid(body, (0.0, 0.0, 1.0, 1.0)).unwrap().at(0.5, 0.5),
+            Some(9.0)
+        );
     }
 
     #[test]
