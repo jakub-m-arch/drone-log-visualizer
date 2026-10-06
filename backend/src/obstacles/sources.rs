@@ -79,12 +79,12 @@ fn upstream(service: &str, e: reqwest::Error) -> AppError {
     ))
 }
 
-/// GET with up to 3 attempts when the request could not be sent (refused or
-/// dropped connections, TLS EOF). Some public services sit behind several
-/// servers that do not all accept the connection, so another attempt can
-/// succeed. HTTP errors and timeouts are not retried.
+/// GET with up to 4 attempts when the request could not be sent (refused or
+/// dropped connections, TLS EOF). GUGiK drops a share of connections even
+/// from curl, so another attempt usually succeeds. HTTP errors and timeouts
+/// are not retried.
 async fn get_with_retry(service: &str, url: &str) -> AppResult<reqwest::Response> {
-    const ATTEMPTS: u32 = 3;
+    const ATTEMPTS: u32 = 4;
     let mut attempt = 1;
     loop {
         match client().get(url).send().await {
@@ -273,11 +273,12 @@ pub async fn gugik_lidar(req: LidarRequest<'_>) -> AppResult<Value> {
         fill_template(req.dtm_template, area),
         fill_template(req.dsm_template, area),
     );
-    // Both requests run to completion so an error names every failing service.
-    let (dtm, dsm) = match tokio::join!(
-        fetch_grid("GUGiK NMT", &dtm_url, area),
-        fetch_grid("GUGiK NMPT", &dsm_url, area),
-    ) {
+    // One request at a time: GUGiK drops connections intermittently, and
+    // parallel connections from one address make it worse. Both requests are
+    // still made so an error names every failing service.
+    let dtm = fetch_grid("GUGiK NMT", &dtm_url, area).await;
+    let dsm = fetch_grid("GUGiK NMPT", &dsm_url, area).await;
+    let (dtm, dsm) = match (dtm, dsm) {
         (Ok(dtm), Ok(dsm)) => (dtm, dsm),
         (Err(e), Ok(_)) | (Ok(_), Err(e)) => return Err(e),
         (Err(a), Err(b)) => return Err(AppError::Upstream(format!("{a}; {b}"))),
