@@ -403,8 +403,17 @@
             'fill-extrusion-opacity': opacity,
           },
         })
-      m.addSource('trees3d', { type: 'geojson', data: empty })
-      m.addSource('lidar3d', { type: 'geojson', data: empty })
+      // Shown in the attribution control while the layer is visible.
+      m.addSource('trees3d', {
+        type: 'geojson',
+        data: empty,
+        attribution: 'Trees: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+      })
+      m.addSource('lidar3d', {
+        type: 'geojson',
+        data: empty,
+        attribution: 'LiDAR heights: <a href="https://www.geoportal.gov.pl/">GUGiK</a> (NMT, NMPT)',
+      })
       extrusion('lidar3d', 0.7)
       extrusion('trees3d', 0.8)
       extrusion('curtain', 0.25)

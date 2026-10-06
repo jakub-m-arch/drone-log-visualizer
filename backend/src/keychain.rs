@@ -36,7 +36,7 @@ pub fn request_hash(request: &KeychainsRequest) -> AppResult<String> {
 pub fn http_client() -> reqwest::Client {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
-        .user_agent(concat!("dji-log-viewer/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("drone-log-visualizer/", env!("CARGO_PKG_VERSION")))
         .build()
         .expect("failed to build HTTP client")
 }

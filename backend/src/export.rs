@@ -47,7 +47,7 @@ pub fn gpx(flight: &FlightSummary, samples: &[Sample]) -> String {
     let mut out = String::new();
     out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     out.push_str(
-        "<gpx version=\"1.1\" creator=\"dji-log-viewer\" xmlns=\"http://www.topografix.com/GPX/1/1\">\n",
+        "<gpx version=\"1.1\" creator=\"drone-log-visualizer\" xmlns=\"http://www.topografix.com/GPX/1/1\">\n",
     );
     let _ = writeln!(out, "  <metadata><name>{name}</name>");
     if let Some(t) = flight.meta.start_time {

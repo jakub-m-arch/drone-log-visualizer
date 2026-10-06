@@ -9,7 +9,7 @@
 //! With `--encrypted` it writes a format v14 log encrypted with made-up keys.
 //! The real DJI API cannot decrypt it, so it is only useful for checking the
 //! error messages around `DJI_API_KEY`.
-use dji_log_viewer::synthetic::{SHOWCASE_FILES, SynthFlight, SynthKeys};
+use drone_log_visualizer::synthetic::{SHOWCASE_FILES, SynthFlight, SynthKeys};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();

@@ -31,6 +31,8 @@ const REC_CAMERA: u8 = 25;
 
 /// Product type byte for "Mavic Pro" (3 battery cells).
 const PRODUCT_MAVIC_PRO: u8 = 13;
+/// Product type byte for "Mini 4 Pro" (2 battery cells, under 250 g, class C0).
+const PRODUCT_MINI_4_PRO: u8 = 126;
 /// Flight mode byte for "GPSAtti" (the normal P-GPS mode).
 const FLIGHT_MODE_GPS_ATTI: u8 = 6;
 
@@ -61,6 +63,9 @@ pub struct SynthSample {
 #[derive(Debug, Clone)]
 pub struct SynthFlight {
     pub aircraft_name: String,
+    /// DJI product type byte and its number of battery cells.
+    pub product_type: u8,
+    pub battery_cells: u16,
     /// Street and city written to the log details.
     pub street: String,
     pub city: String,
@@ -144,6 +149,8 @@ impl SynthFlight {
 
         SynthFlight {
             aircraft_name: "Test Mavic".into(),
+            product_type: PRODUCT_MAVIC_PRO,
+            battery_cells: 3,
             street: "Main".into(),
             city: "Warsaw".into(),
             aircraft_sn: "SYNTH0001".into(),
@@ -161,7 +168,10 @@ impl SynthFlight {
     /// market square, castle hill) on different days, used for the README
     /// screenshots and for trying the viewer. `variant` is taken modulo 3:
     /// 0 orbits the castle hill, 1 follows the river, 2 circles the market
-    /// square. All stay within 450 m of take-off and below 120 m.
+    /// square. All stay within 450 m of take-off and below 120 m, flown by
+    /// a sub-250 g Mini 4 Pro (class C0), the kind of aircraft that may fly
+    /// over a town in the EU "open" category. Real flights there still need
+    /// a check of the local geozones.
     pub fn showcase(variant: u8) -> Self {
         use Leg::*;
         // Take-off on the riverside boulevard.
@@ -211,7 +221,7 @@ impl SynthFlight {
             ),
         };
         let mut f = Self::from_legs(&legs, home_lat, home_lon, start_ms, u64::from(variant));
-        f.aircraft_name = "Demo Mavic".into();
+        f.aircraft_name = "Demo Mini".into();
         f.aircraft_sn = "DEMO0001".into();
         f.street = "Bulwar".into();
         f.city = "Kazimierz Dolny".into();
@@ -337,7 +347,7 @@ impl SynthFlight {
                 gps_num: (19.5 + wobble(t, 90.0) * 2.5).round() as u8,
                 battery_pct: pct as u8,
                 // Voltage sags a little under load in climbs and fast legs.
-                battery_mv: (3.0 * (3550.0 + 6.5 * pct)
+                battery_mv: (2.0 * (3550.0 + 6.5 * pct)
                     - if on_ground {
                         0.0
                     } else {
@@ -363,6 +373,8 @@ impl SynthFlight {
         let max_h = path.iter().map(|p| p.2).fold(0.0, f64::max);
         SynthFlight {
             aircraft_name: String::new(),
+            product_type: PRODUCT_MINI_4_PRO,
+            battery_cells: 2,
             aircraft_sn: String::new(),
             street: String::new(),
             city: String::new(),
@@ -429,7 +441,7 @@ impl SynthFlight {
             w.push(REC_OSD, &osd_payload(s));
             if i % 10 == 0 {
                 w.push(REC_HOME, &self.home_payload());
-                w.push(REC_CENTER_BATTERY, &battery_payload(s));
+                w.push(REC_CENTER_BATTERY, &battery_payload(s, self.battery_cells));
             }
             w.push(REC_CUSTOM, &custom_payload(s));
             w.push(REC_GIMBAL, &gimbal_payload(s));
@@ -504,7 +516,7 @@ impl SynthFlight {
         p.extend_from_slice(&0i64.to_le_bytes()); // analysis offset
         p.extend_from_slice(&[0u8; 16]); // md5
         p.extend_from_slice(&self.home_alt_m.to_le_bytes()); // take off altitude
-        p.push(PRODUCT_MAVIC_PRO);
+        p.push(self.product_type);
         p.extend_from_slice(&0i64.to_le_bytes()); // activation timestamp
         p.extend_from_slice(&fixed_str(&self.aircraft_name, 32));
         p.extend_from_slice(&fixed_str(&self.aircraft_sn, 16));
@@ -758,7 +770,7 @@ fn custom_payload(s: &SynthSample) -> Vec<u8> {
     p
 }
 
-fn battery_payload(s: &SynthSample) -> Vec<u8> {
+fn battery_payload(s: &SynthSample, cells: u16) -> Vec<u8> {
     let mut p = Vec::with_capacity(32);
     p.push(s.battery_pct);
     p.extend_from_slice(&s.battery_mv.to_le_bytes());
@@ -768,9 +780,9 @@ fn battery_payload(s: &SynthSample) -> Vec<u8> {
     p.extend_from_slice(&42u16.to_le_bytes()); // discharges
     p.extend_from_slice(&0u32.to_le_bytes()); // error
     p.extend_from_slice(&(-5000i16).to_le_bytes()); // current mA
-    let cell = s.battery_mv / 3;
+    let cell = s.battery_mv / cells;
     for i in 0..6 {
-        p.extend_from_slice(&(if i < 3 { cell } else { 0 }).to_le_bytes());
+        p.extend_from_slice(&(if i < cells { cell } else { 0 }).to_le_bytes());
     }
     p.extend_from_slice(&1u16.to_le_bytes());
     p.extend_from_slice(&0u16.to_le_bytes());

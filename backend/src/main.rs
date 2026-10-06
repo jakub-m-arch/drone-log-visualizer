@@ -1,10 +1,10 @@
-use dji_log_viewer::config::Config;
-use dji_log_viewer::{AppState, app, db};
+use drone_log_visualizer::config::Config;
+use drone_log_visualizer::{AppState, app, db};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() {
-    // `dji-log-viewer healthcheck` is used by the Docker HEALTHCHECK (the
+    // `drone-log-visualizer healthcheck` is used by the Docker HEALTHCHECK (the
     // runtime image has no curl).
     if std::env::args().nth(1).as_deref() == Some("healthcheck") {
         std::process::exit(healthcheck().await);
@@ -45,7 +45,7 @@ async fn main() {
         data_dir = %config.data_dir.display(),
         static_dir = %config.static_dir.display(),
         api_key_configured = config.api_key.is_some(),
-        "starting DJI flight log viewer"
+        "starting Drone Log Visualizer"
     );
 
     let listener = tokio::net::TcpListener::bind(addr)

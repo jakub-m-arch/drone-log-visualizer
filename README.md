@@ -1,8 +1,10 @@
 <div align="center">
 
-# DJI Flight Log Viewer
+# Drone Log Visualizer
 
-**Your DJI flight logs on a map, in 3D and on charts. Self-hosted, runs in a single Docker container.**
+**A viewer for DJI drone flight logs: on a map, in 3D and on charts. Self-hosted, runs in a single Docker container.**
+
+<sub>Independent open-source project. Not affiliated with, endorsed or sponsored by DJI.</sub>
 
 [![CI](https://github.com/jakub-m-arch/drone-log-visualizer/actions/workflows/ci.yml/badge.svg)](https://github.com/jakub-m-arch/drone-log-visualizer/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -22,6 +24,7 @@
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/flight-view-dark.png">
   <img alt="Flight view: the track on a map colored by height, live telemetry, synchronized charts and the events list" src="docs/screenshots/flight-view.png" width="100%">
 </picture>
+<sub>Synthetic demo flight. Map data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors.</sub>
 
 </div>
 
@@ -33,7 +36,9 @@ stay on your computer: there is no account, no cloud and no telemetry.
 > [!TIP]
 > No drone at hand? [`samples/`](samples) holds three synthetic flights over
 > Kazimierz Dolny, the same ones as in the screenshots. Drop the folder onto
-> the page.
+> the page. They are generated, not recorded, and model a sub-250 g Mini 4 Pro
+> (class C0). Before a real flight like this, check the local geozones, e.g. on
+> [DroneMap](https://dronemap.pansa.pl/) in Poland.
 
 ## Highlights
 
@@ -67,11 +72,16 @@ folder, onto the page.
 
 | | |
 | --- | --- |
-| Update | `git pull && docker compose up -d --build` |
+| Update | `git pull && docker compose up -d --build --remove-orphans` |
 | Stop | `docker compose down` (keeps your data) |
 | Remove everything | `docker compose down -v --rmi all` (deletes flights, cached keys and the image) |
 
 Everything is stored in SQLite in the `dji-data` Docker volume, mounted at `/data`.
+
+> [!NOTE]
+> The project was called *DJI Flight Log Viewer* before. Updating from that
+> version keeps your flights: the volume name is unchanged, and
+> `--remove-orphans` removes the old container.
 
 ## A quick tour
 
@@ -99,6 +109,9 @@ telemetry panel and the charts follow it.
 </p>
 
 <img alt="3D view with buildings, terrain and the track colored by height" src="docs/screenshots/view-3d.jpg" width="100%">
+<sub>Synthetic demo flight. Map data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors,
+<a href="https://openfreemap.org/">OpenFreeMap</a>, © <a href="https://openmaptiles.org/">OpenMapTiles</a>.
+Elevation: <a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md">Mapzen Terrain Tiles</a> (AWS Open Data).</sub>
 
 ### Real obstacle heights from LiDAR (Poland)
 
@@ -109,6 +122,9 @@ drawn as 1 m blocks. In this example, 50,031 blocks render the trees around the
 castle hill that OpenStreetMap does not have.
 
 <img alt="LiDAR layer: individual trees and buildings as height blocks around the flight" src="docs/screenshots/lidar-3d.jpg" width="100%">
+<sub>Object heights: <a href="https://www.geoportal.gov.pl/">GUGiK</a>, numerical terrain model (NMT) and numerical surface model (NMPT).
+Map data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, OpenFreeMap, © OpenMapTiles.
+Elevation: Mapzen Terrain Tiles.</sub>
 
 ## Features
 
@@ -189,6 +205,13 @@ developer **App Key**. Older logs (v1–v12) and the samples work without one.
 > database, to application logs or to API responses (`/api/config` only says
 > *whether* a key is configured). Keep `.env` out of version control; it is
 > already in `.gitignore`.
+>
+> **An instance with your key is for you only.** Do not expose it on the
+> internet or run it for other people: they would be using your key, which
+> DJI's terms do not allow, and you would be handling their flight data
+> (locations, serial numbers), which brings data-protection obligations such
+> as the GDPR. Everyone who wants to use the app should run their own instance
+> with their own key.
 
 ## Privacy: what leaves your machine
 
@@ -239,7 +262,8 @@ may be missing or lower.
 > Use these layers as context when you look back at a flight. They are **not
 > obstacle clearance data**: power lines, cranes and anything built since
 > the data was collected may be missing. Always check the airspace and the
-> surroundings yourself before you fly.
+> surroundings yourself before you fly, and follow the drone rules that apply
+> where you fly (in the EU: Regulation (EU) 2019/947 and the local geozones).
 
 ## Configuration
 
@@ -329,7 +353,7 @@ files.
 <details>
 <summary><b>How do I back up my data?</b></summary>
 
-Run `docker compose stop && docker compose cp dji-log-viewer:/data ./backup && docker compose start`.
+Run `docker compose stop && docker compose cp drone-log-visualizer:/data ./backup && docker compose start`.
 This copies the SQLite database, which holds all flights, telemetry and cached keys.
 </details>
 
@@ -423,5 +447,9 @@ Ideas and pull requests are welcome.
 
 ## License
 
-[MIT](LICENSE). Not affiliated with or endorsed by DJI. "DJI" is a trademark of
-SZ DJI Technology Co., Ltd.
+[MIT](LICENSE).
+
+Drone Log Visualizer is an independent project and is not affiliated with,
+endorsed or sponsored by DJI. "DJI", "Mavic" and "Mini" are trademarks of
+SZ DJI Technology Co., Ltd. They are used here only to say which flight logs
+and aircraft the app works with.
