@@ -61,6 +61,9 @@ pub struct SynthSample {
 #[derive(Debug, Clone)]
 pub struct SynthFlight {
     pub aircraft_name: String,
+    /// Street and city written to the log details.
+    pub street: String,
+    pub city: String,
     pub aircraft_sn: String,
     pub start_ms: i64,
     pub home_lat: f64,
@@ -141,6 +144,8 @@ impl SynthFlight {
 
         SynthFlight {
             aircraft_name: "Test Mavic".into(),
+            street: "Main".into(),
+            city: "Warsaw".into(),
             aircraft_sn: "SYNTH0001".into(),
             start_ms,
             home_lat,
@@ -149,6 +154,225 @@ impl SynthFlight {
             samples,
             details_distance_m: 240.0,
             details_max_height_m: 40.0,
+        }
+    }
+
+    /// One of three scenic flights over Kazimierz Dolny (Vistula riverside,
+    /// market square, castle hill) on different days, used for the README
+    /// screenshots and for trying the viewer. `variant` is taken modulo 3:
+    /// 0 orbits the castle hill, 1 follows the river, 2 circles the market
+    /// square. All stay within 450 m of take-off and below 120 m.
+    pub fn showcase(variant: u8) -> Self {
+        use Leg::*;
+        // Take-off on the riverside boulevard.
+        let (home_lat, home_lon) = (51.3242, 21.9463);
+        let (rynek, castle) = ((74.0, -236.0), (282.0, -69.0));
+        let (legs, start_ms, wind_at): (Vec<Leg>, i64, f64) = match variant % 3 {
+            0 => (
+                vec![
+                    To(0.0, 0.0, 60.0, 3.0),
+                    To(rynek.0, rynek.1, 60.0, 8.0),
+                    Hover(6.0, true),
+                    To(200.0, -150.0, 85.0, 7.0),
+                    Orbit(castle.0, castle.1, 90.0, 95.0, 1.25, 6.0),
+                    To(350.0, 150.0, 110.0, 9.0),
+                    Hover(5.0, true),
+                    To(0.0, 0.0, 40.0, 10.0),
+                    To(0.0, 0.0, 0.0, 2.5),
+                ],
+                1_747_465_200_000, // 2025-05-17 07:00 UTC
+                0.45,
+            ),
+            1 => (
+                vec![
+                    To(0.0, 0.0, 45.0, 3.0),
+                    To(-60.0, 420.0, 50.0, 9.0),
+                    Hover(4.0, true),
+                    To(-30.0, -380.0, 70.0, 12.0),
+                    Hover(4.0, true),
+                    To(0.0, 0.0, 30.0, 9.0),
+                    To(0.0, 0.0, 0.0, 2.0),
+                ],
+                1_749_394_800_000, // 2025-06-08 15:00 UTC
+                0.6,
+            ),
+            _ => (
+                vec![
+                    To(0.0, 0.0, 50.0, 3.0),
+                    To(rynek.0, rynek.1 + 70.0, 50.0, 7.0),
+                    Orbit(rynek.0, rynek.1, 70.0, 50.0, 2.0, 5.0),
+                    To(rynek.0, rynek.1, 70.0, 4.0),
+                    Hover(5.0, true),
+                    To(0.0, 0.0, 25.0, 8.0),
+                    To(0.0, 0.0, 0.0, 2.0),
+                ],
+                1_755_968_400_000, // 2025-08-23 17:00 UTC
+                0.3,
+            ),
+        };
+        let mut f = Self::from_legs(&legs, home_lat, home_lon, start_ms, u64::from(variant));
+        f.aircraft_name = "Demo Mavic".into();
+        f.aircraft_sn = "DEMO0001".into();
+        f.street = "Bulwar".into();
+        f.city = "Kazimierz Dolny".into();
+        f.home_alt_m = 120.0;
+        let n = f.samples.len();
+        let w = (n as f64 * wind_at) as usize;
+        f.samples[w].warn = Some("Strong wind. Fly with caution".into());
+        f
+    }
+
+    /// Builds a flight from route legs in local metres (east, north, height
+    /// above take-off), sampled at 10 Hz, with 5 s on the ground at each end.
+    fn from_legs(legs: &[Leg], home_lat: f64, home_lon: f64, start_ms: i64, seed: u64) -> Self {
+        const DT: f64 = 0.1;
+        // Dense path of (east, north, height, photo spot).
+        let mut path: Vec<(f64, f64, f64, bool)> = vec![(0.0, 0.0, 0.0, false); 50];
+        let mut cur = (0.0, 0.0, 0.0);
+        for leg in legs {
+            match *leg {
+                Leg::To(x, y, h, v) => {
+                    let len =
+                        ((x - cur.0).powi(2) + (y - cur.1).powi(2) + (h - cur.2).powi(2)).sqrt();
+                    let steps = ((len / v) / DT).ceil().max(1.0) as usize;
+                    for k in 1..=steps {
+                        let a = k as f64 / steps as f64;
+                        path.push((
+                            cur.0 + (x - cur.0) * a,
+                            cur.1 + (y - cur.1) * a,
+                            cur.2 + (h - cur.2) * a,
+                            false,
+                        ));
+                    }
+                    cur = (x, y, h);
+                }
+                Leg::Hover(secs, photo) => {
+                    let steps = (secs / DT) as usize;
+                    for k in 0..steps {
+                        path.push((
+                            cur.0,
+                            cur.1,
+                            cur.2,
+                            photo && (k == steps / 3 || k == 2 * steps / 3),
+                        ));
+                    }
+                }
+                Leg::Orbit(cx, cy, r, h, turns, v) => {
+                    let a0 = (cur.1 - cy).atan2(cur.0 - cx);
+                    let total = turns * 2.0 * PI;
+                    let steps = ((total * r / v) / DT).ceil() as usize;
+                    let start = cur;
+                    for k in 1..=steps {
+                        let a = k as f64 / steps as f64;
+                        let ang = a0 + total * a;
+                        // Blend from the entry point onto the circle.
+                        let blend = (a * 8.0).min(1.0);
+                        let (ox, oy) = (cx + r * ang.cos(), cy + r * ang.sin());
+                        path.push((
+                            start.0 + (ox - start.0) * blend,
+                            start.1 + (oy - start.1) * blend,
+                            start.2 + (h - start.2) * blend,
+                            false,
+                        ));
+                    }
+                    let last = *path.last().expect("orbit has steps");
+                    cur = (last.0, last.1, last.2);
+                }
+            }
+        }
+        path.extend(std::iter::repeat_n((0.0, 0.0, 0.0, false), 50));
+
+        // Smooth corners, take-off and landing over ±1.5 s.
+        let raw = path.clone();
+        let half = 15usize;
+        for (i, p) in path.iter_mut().enumerate() {
+            let (a, b) = (i.saturating_sub(half), (i + half).min(raw.len() - 1));
+            let m = (b - a + 1) as f64;
+            let sum = raw[a..=b]
+                .iter()
+                .fold((0.0, 0.0, 0.0), |s, q| (s.0 + q.0, s.1 + q.1, s.2 + q.2));
+            let h = sum.2 / m;
+            (p.0, p.1, p.2) = (sum.0 / m, sum.1 / m, if h < 0.05 { 0.0 } else { h });
+        }
+
+        let m_per_deg_lon = 111_320.0 * home_lat.to_radians().cos();
+        // Slow, smooth variation (in -1..1) so the charts look like real data.
+        let phase = seed as f64 * 1.7;
+        let wobble = |t: f64, period: f64| {
+            ((t / period + phase) * 2.0 * PI).sin() * 0.7
+                + ((t / (period * 0.37) + phase * 2.3) * 2.0 * PI).sin() * 0.3
+        };
+        let n = path.len();
+        let airborne = |i: usize| path[i].2 > 0.05;
+        let first_air = (0..n).find(|&i| airborne(i)).unwrap_or(0);
+        let last_air = (0..n).rev().find(|&i| airborne(i)).unwrap_or(n - 1);
+        let mut samples = Vec::with_capacity(n);
+        let mut yaw = 0.0f64;
+        for i in 0..n {
+            let (x, y, h, photo_spot) = path[i];
+            let (px, py, ph, _) = path[i.saturating_sub(1)];
+            let (vx, vy, vz) = ((x - px) / DT, (y - py) / DT, (h - ph) / DT);
+            if vx.hypot(vy) > 0.5 {
+                yaw = vx.atan2(vy).to_degrees();
+            }
+            let dist = x.hypot(y);
+            let t = i as f64 * DT;
+            let on_ground = !(first_air..=last_air).contains(&i);
+            let pct = (97.0 - t * 0.14).max(10.0);
+            let recording = h > 20.0 && (i / 600) % 2 == 0;
+            samples.push(SynthSample {
+                timestamp_ms: start_ms + (t * 1000.0) as i64,
+                fly_time_s: if i < first_air {
+                    0.0
+                } else {
+                    ((i - first_air) as f64 * DT) as f32
+                },
+                lat: home_lat + y / 111_320.0,
+                lon: home_lon + x / m_per_deg_lon,
+                height_m: h as f32,
+                speed_x: vy as f32,
+                speed_y: vx as f32,
+                speed_z: -vz as f32,
+                yaw_deg: yaw as f32,
+                gps_num: (19.5 + wobble(t, 90.0) * 2.5).round() as u8,
+                battery_pct: pct as u8,
+                // Voltage sags a little under load in climbs and fast legs.
+                battery_mv: (3.0 * (3550.0 + 6.5 * pct)
+                    - if on_ground {
+                        0.0
+                    } else {
+                        60.0 + 25.0 * vz.max(0.0) + 4.0 * vx.hypot(vy)
+                    }) as u16,
+                rc_signal: (100.0 - dist / 9.0 + wobble(t, 25.0) * 4.0).clamp(20.0, 100.0) as u8,
+                on_ground,
+                tip: None,
+                warn: None,
+                gimbal_pitch_deg: match () {
+                    _ if on_ground || h < 10.0 => 0.0,
+                    _ if photo_spot || vx.hypot(vy) < 0.3 => -60.0,
+                    _ => (-25.0 + wobble(t, 40.0) * 5.0) as f32,
+                },
+                photo: photo_spot,
+                recording,
+            });
+        }
+        let distance: f64 = path
+            .windows(2)
+            .map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1))
+            .sum();
+        let max_h = path.iter().map(|p| p.2).fold(0.0, f64::max);
+        SynthFlight {
+            aircraft_name: String::new(),
+            aircraft_sn: String::new(),
+            street: String::new(),
+            city: String::new(),
+            start_ms,
+            home_lat,
+            home_lon,
+            home_alt_m: 0.0,
+            samples,
+            details_distance_m: distance as f32,
+            details_max_height_m: max_h as f32,
         }
     }
 
@@ -244,7 +468,7 @@ impl SynthFlight {
     fn details_payload(&self) -> Vec<u8> {
         let duration_ms = self.samples.len() as i32 * 100;
         let mut p = Vec::new();
-        for s in ["Street", "Main", "Warsaw", "PL"] {
+        for s in ["", &self.street, &self.city, "PL"] {
             p.extend_from_slice(&fixed_str(s, 20));
         }
         p.extend_from_slice(&[0, 1, 0]); // favorite, new, needs upload
@@ -256,9 +480,24 @@ impl SynthFlight {
         p.extend_from_slice(&self.details_distance_m.to_le_bytes());
         p.extend_from_slice(&duration_ms.to_le_bytes());
         p.extend_from_slice(&self.details_max_height_m.to_le_bytes());
-        p.extend_from_slice(&8.0f32.to_le_bytes()); // max horizontal speed
-        p.extend_from_slice(&4.0f32.to_le_bytes()); // max vertical speed
-        p.extend_from_slice(&2i32.to_le_bytes()); // photos
+        let max_h = self
+            .samples
+            .iter()
+            .map(|s| s.speed_x.hypot(s.speed_y))
+            .fold(0.0f32, f32::max);
+        let max_v = self
+            .samples
+            .iter()
+            .map(|s| s.speed_z.abs())
+            .fold(0.0f32, f32::max);
+        let photos = self
+            .samples
+            .windows(2)
+            .filter(|w| w[1].photo && !w[0].photo)
+            .count() as i32;
+        p.extend_from_slice(&max_h.to_le_bytes()); // max horizontal speed
+        p.extend_from_slice(&max_v.to_le_bytes()); // max vertical speed
+        p.extend_from_slice(&photos.to_le_bytes()); // photos
         p.extend_from_slice(&0i64.to_le_bytes()); // video time
         p.extend_from_slice(&[0u8; 4 * 4 * 2]); // moment pic buffer lengths
         p.extend_from_slice(&[0u8; 8 * 4 * 2]); // moment pic coordinates
@@ -277,6 +516,25 @@ impl SynthFlight {
         p.resize(p.len().max(400), 0);
         p
     }
+}
+
+/// File names of the showcase flights (`SynthFlight::showcase(0..3)`), as
+/// committed in `samples/`, in DJI's naming scheme (local take-off time).
+pub const SHOWCASE_FILES: [&str; 3] = [
+    "DJIFlightRecord_2025-05-17_[09-00-00].txt",
+    "DJIFlightRecord_2025-06-08_[17-00-00].txt",
+    "DJIFlightRecord_2025-08-23_[19-00-00].txt",
+];
+
+/// A piece of a synthetic route, in local metres relative to take-off.
+#[derive(Debug, Clone, Copy)]
+enum Leg {
+    /// Fly straight to (east, north, height) at the given speed (m/s).
+    To(f64, f64, f64, f64),
+    /// Hover for the given seconds, taking two photos if `true`.
+    Hover(f64, bool),
+    /// Circle (centre east, centre north, radius, height, turns, speed).
+    Orbit(f64, f64, f64, f64, f64, f64),
 }
 
 fn prefix(version: u8, detail_offset: u64, detail_length: u16) -> Vec<u8> {
@@ -523,6 +781,40 @@ fn battery_payload(s: &SynthSample) -> Vec<u8> {
 mod tests {
     use super::*;
     use dji_log_parser::DJILog;
+
+    /// `samples/` holds the showcase flights for trying the viewer; they must
+    /// match the generator (regenerate with `gen-sample-log --showcase`).
+    #[test]
+    fn committed_samples_match_the_generator() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../samples");
+        for (v, name) in SHOWCASE_FILES.iter().enumerate() {
+            let bytes = std::fs::read(dir.join(name)).unwrap();
+            assert!(
+                bytes == SynthFlight::showcase(v as u8).to_bytes(),
+                "{name} is out of date"
+            );
+        }
+    }
+
+    #[test]
+    fn showcase_flights_parse_and_stay_near_takeoff() {
+        for v in 0..3 {
+            let synth = SynthFlight::showcase(v);
+            let log = DJILog::from_bytes(synth.to_bytes()).unwrap();
+            let frames = log.frames(None).unwrap();
+            assert!(frames.len() > 1500, "variant {v}: {} frames", frames.len());
+            let m_lon = 111_320.0 * synth.home_lat.to_radians().cos();
+            for f in &frames {
+                let (dx, dy) = (
+                    (f.osd.longitude - synth.home_lon) * m_lon,
+                    (f.osd.latitude - synth.home_lat) * 111_320.0,
+                );
+                assert!(dx.hypot(dy) < 450.0, "variant {v}");
+                assert!((0.0..120.0).contains(&f.osd.height), "variant {v}");
+            }
+            assert!(frames.iter().any(|f| f.camera.is_photo));
+        }
+    }
 
     #[test]
     fn encrypted_log_decrypts_to_same_frames_as_raw() {
