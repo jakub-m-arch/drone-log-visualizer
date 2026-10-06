@@ -79,21 +79,30 @@ fn upstream(service: &str, e: reqwest::Error) -> AppError {
     ))
 }
 
-/// GET with one retry after a short pause when the connection itself failed
-/// (not on HTTP errors or timeouts, which would just repeat).
+/// GET with up to 3 attempts when the request could not be sent (refused or
+/// dropped connections, TLS EOF). Some public services sit behind several
+/// servers that do not all accept the connection, so another attempt can
+/// succeed. HTTP errors and timeouts are not retried.
 async fn get_with_retry(service: &str, url: &str) -> AppResult<reqwest::Response> {
-    match client().get(url).send().await {
-        Ok(res) => Ok(res),
-        Err(e) if e.is_connect() => {
-            tracing::warn!(service, "connection failed, retrying once");
-            tokio::time::sleep(Duration::from_secs(2)).await;
-            client()
-                .get(url)
-                .send()
-                .await
-                .map_err(|e| upstream(service, e))
+    const ATTEMPTS: u32 = 3;
+    let mut attempt = 1;
+    loop {
+        match client().get(url).send().await {
+            Ok(res) => return Ok(res),
+            Err(e)
+                if attempt < ATTEMPTS && !e.is_timeout() && (e.is_connect() || e.is_request()) =>
+            {
+                tracing::warn!(
+                    service,
+                    attempt,
+                    "request failed, retrying: {}",
+                    crate::error::describe_request_error(e)
+                );
+                tokio::time::sleep(Duration::from_millis(1500 * u64::from(attempt))).await;
+                attempt += 1;
+            }
+            Err(e) => return Err(upstream(service, e)),
         }
-        Err(e) => Err(upstream(service, e)),
     }
 }
 
