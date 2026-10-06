@@ -364,7 +364,7 @@ pub fn summarize(
 
     let location = [details.city.as_str(), details.area.as_str()]
         .iter()
-        .filter(|s| !s.trim().is_empty())
+        .filter(|s| is_real_place(s))
         .copied()
         .collect::<Vec<_>>()
         .join(", ");
@@ -400,6 +400,13 @@ pub fn summarize(
         location,
         sample_count: samples.len(),
     }
+}
+
+/// DJI apps write placeholders such as "Map Loading" into the address fields
+/// when reverse geocoding had not finished.
+fn is_real_place(s: &str) -> bool {
+    let s = s.trim();
+    !s.is_empty() && !s.eq_ignore_ascii_case("map loading") && !s.eq_ignore_ascii_case("unknown")
 }
 
 /// Great-circle distance in metres.
@@ -448,6 +455,13 @@ mod tests {
         f.osd.longitude = lon;
         f.custom.date_time = DateTime::from_timestamp_millis(ts_ms).unwrap();
         f
+    }
+
+    #[test]
+    fn address_placeholders_are_not_locations() {
+        assert!(!is_real_place("Map Loading"));
+        assert!(!is_real_place("  "));
+        assert!(is_real_place("Warsaw"));
     }
 
     #[test]

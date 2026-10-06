@@ -350,6 +350,9 @@ async fn config_reports_key_presence_but_never_the_key() {
     assert_eq!(body["supportedLogVersions"]["max"], 14);
     assert!(!body.to_string().contains(GOOD_KEY));
 
+    let (_, _, headers) = send(&app, get("/api/config")).await;
+    assert_eq!(headers["cache-control"], "no-cache");
+
     let (status, body) = send_json(&app, get("/api/nope")).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body["error"]["code"], "not_found");

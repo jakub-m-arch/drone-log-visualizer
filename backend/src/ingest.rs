@@ -18,7 +18,7 @@ pub const FIRST_ENCRYPTED_VERSION: u8 = 13;
 /// Version of the parse/mapping code. Bump it when `flight.rs` starts
 /// extracting new data: re-uploading a file then refreshes flights stored by
 /// an older version instead of reporting a plain duplicate.
-pub const PARSE_VERSION: i64 = 2;
+pub const PARSE_VERSION: i64 = 3;
 
 #[derive(Debug)]
 pub struct IngestOutcome {

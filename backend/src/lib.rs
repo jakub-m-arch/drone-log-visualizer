@@ -41,6 +41,27 @@ pub fn app(state: AppState) -> Router {
     let static_dir = state.config.static_dir.clone();
     let spa = ServeDir::new(&static_dir).fallback(ServeFile::new(static_dir.join("index.html")));
     api::router(state)
+        // Fingerprinted bundles: a missing file is a 404, not the SPA page.
+        .nest_service("/assets", ServeDir::new(static_dir.join("assets")))
         .fallback_service(spa)
+        .layer(axum::middleware::map_response(cache_headers))
         .layer(TraceLayer::new_for_http())
+}
+
+/// Vite fingerprints everything under /assets/, so those files can be cached
+/// forever; everything else (index.html, the API) must be revalidated so a
+/// rebuilt image is picked up without a hard refresh.
+async fn cache_headers(
+    uri: axum::http::Uri,
+    mut res: axum::response::Response,
+) -> axum::response::Response {
+    use axum::http::{HeaderValue, header};
+    let value = if uri.path().starts_with("/assets/") && res.status().is_success() {
+        "public, max-age=31536000, immutable"
+    } else {
+        "no-cache"
+    };
+    res.headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static(value));
+    res
 }
