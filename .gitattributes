@@ -1,0 +1,2 @@
+# Synthetic flight logs are binary; never convert line endings.
+samples/*.txt binary
