@@ -73,7 +73,28 @@ fn client() -> reqwest::Client {
 }
 
 fn upstream(service: &str, e: reqwest::Error) -> AppError {
-    AppError::Network(format!("{service}: {}", e.without_url()))
+    AppError::Network(format!(
+        "{service}: {}",
+        crate::error::describe_request_error(e)
+    ))
+}
+
+/// GET with one retry after a short pause when the connection itself failed
+/// (not on HTTP errors or timeouts, which would just repeat).
+async fn get_with_retry(service: &str, url: &str) -> AppResult<reqwest::Response> {
+    match client().get(url).send().await {
+        Ok(res) => Ok(res),
+        Err(e) if e.is_connect() => {
+            tracing::warn!(service, "connection failed, retrying once");
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            client()
+                .get(url)
+                .send()
+                .await
+                .map_err(|e| upstream(service, e))
+        }
+        Err(e) => Err(upstream(service, e)),
+    }
 }
 
 // ---- OSM trees via Overpass -------------------------------------------------
@@ -187,11 +208,7 @@ async fn fetch_grid(
     url: &str,
     area: (f64, f64, f64, f64),
 ) -> AppResult<raster::Grid> {
-    let res = client()
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| upstream(service, e))?;
+    let res = get_with_retry(service, url).await?;
     let status = res.status();
     let bytes = res.bytes().await.map_err(|e| upstream(service, e))?;
     if !status.is_success() {

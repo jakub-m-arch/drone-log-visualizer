@@ -69,22 +69,11 @@ pub async fn fetch(
     parse_response(&body)
 }
 
-/// Includes the underlying cause ("connection refused", "invalid peer
-/// certificate", ...), which `reqwest` keeps out of its own message. The API
-/// key travels in a header and is never part of these errors.
 fn network_error(e: reqwest::Error) -> AppError {
-    let e = e.without_url();
-    let mut msg = e.to_string();
-    let mut source = std::error::Error::source(&e);
-    while let Some(cause) = source {
-        let text = cause.to_string();
-        if !msg.contains(&text) {
-            msg.push_str(": ");
-            msg.push_str(&text);
-        }
-        source = cause.source();
-    }
-    AppError::Network(msg)
+    AppError::Network(format!(
+        "the DJI API: {}",
+        crate::error::describe_request_error(e)
+    ))
 }
 
 fn parse_response(body: &str) -> AppResult<Keychains> {

@@ -246,4 +246,15 @@ async fn upstream_failures_are_reported_and_not_cached() {
     assert_eq!(status, StatusCode::BAD_GATEWAY, "{v}");
     assert_eq!(v["error"]["code"], "network_error");
     assert!(v["error"]["message"].as_str().unwrap().contains("Overpass"));
+
+    // GUGiK: both services named, with the cause, and nothing about DJI.
+    let (status, v) = get_json(&app, &format!("/api/flights/{id}/obstacles/lidar")).await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY, "{v}");
+    let msg = v["error"]["message"].as_str().unwrap();
+    assert!(
+        msg.contains("GUGiK NMT") && msg.contains("GUGiK NMPT"),
+        "{msg}"
+    );
+    assert!(msg.to_lowercase().contains("connect"), "{msg}");
+    assert!(!msg.contains("DJI"), "{msg}");
 }
