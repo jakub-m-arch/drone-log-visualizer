@@ -184,8 +184,91 @@ pub fn read_aaigrid(bytes: &[u8], expected: (f64, f64, f64, f64)) -> Result<Grid
     })
 }
 
-/// Reads an elevation grid in either GeoTIFF or Arc/Info ASCII Grid format.
+/// Splits a MIME multipart body (WCS 2.0 servers often answer GetCoverage
+/// with `multipart/related`: a GML description plus the data part). The
+/// boundary is taken from the first line (`--boundary`). Returns the part
+/// bodies, or `None` if the body is not multipart.
+pub fn multipart_parts(bytes: &[u8]) -> Option<Vec<&[u8]>> {
+    if !bytes.starts_with(b"--") {
+        return None;
+    }
+    let first_line_end = bytes.iter().position(|&b| b == b'\n')?;
+    let boundary = trim_ascii(&bytes[..first_line_end]).to_vec();
+    if boundary.len() < 3 {
+        return None;
+    }
+    let mut parts = Vec::new();
+    let mut pos = first_line_end + 1;
+    while pos < bytes.len() {
+        let next = find(&bytes[pos..], &boundary).map(|i| pos + i);
+        let end = next.unwrap_or(bytes.len());
+        let part = &bytes[pos..end];
+        // Headers end at the first blank line.
+        let body_start = find(part, b"\r\n\r\n")
+            .map(|i| i + 4)
+            .or_else(|| find(part, b"\n\n").map(|i| i + 2));
+        if let Some(start) = body_start {
+            let mut body = &part[start..];
+            // Drop the line break that precedes the next boundary.
+            if body.ends_with(b"\r\n") {
+                body = &body[..body.len() - 2];
+            } else if body.ends_with(b"\n") {
+                body = &body[..body.len() - 1];
+            }
+            parts.push(body);
+        }
+        match next {
+            Some(n) => {
+                pos = n + boundary.len();
+                if bytes[pos..].starts_with(b"--") {
+                    break; // closing boundary
+                }
+                pos += bytes[pos..]
+                    .iter()
+                    .position(|&b| b == b'\n')
+                    .map_or(0, |i| i + 1);
+            }
+            None => break,
+        }
+    }
+    Some(parts)
+}
+
+fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
+    hay.windows(needle.len()).position(|w| w == needle)
+}
+
+fn trim_ascii(b: &[u8]) -> &[u8] {
+    let start = b
+        .iter()
+        .position(|c| !c.is_ascii_whitespace())
+        .unwrap_or(b.len());
+    let end = b
+        .iter()
+        .rposition(|c| !c.is_ascii_whitespace())
+        .map_or(start, |i| i + 1);
+    &b[start..end]
+}
+
+/// Reads an elevation grid: GeoTIFF or Arc/Info ASCII Grid, possibly wrapped
+/// in a WCS multipart response (the first part that parses wins).
 pub fn read_grid(bytes: &[u8], expected: (f64, f64, f64, f64)) -> Result<Grid, String> {
+    if let Some(parts) = multipart_parts(bytes) {
+        let mut last_err = "multipart response without parts".to_string();
+        for part in parts {
+            match read_single_grid(part, expected) {
+                Ok(g) => return Ok(g),
+                Err(e) => last_err = e,
+            }
+        }
+        return Err(format!(
+            "no elevation grid in the multipart response ({last_err})"
+        ));
+    }
+    read_single_grid(bytes, expected)
+}
+
+fn read_single_grid(bytes: &[u8], expected: (f64, f64, f64, f64)) -> Result<Grid, String> {
     if bytes.starts_with(b"II*\0") || bytes.starts_with(b"MM\0*") {
         read_geotiff(bytes)
     } else if bytes
@@ -402,6 +485,34 @@ pub mod tests {
                 assert_eq!(v, (10 * e + n) as f32, "e={e} n={n}");
             }
         }
+    }
+
+    #[test]
+    fn wcs_multipart_responses_are_unpacked() {
+        let body = b"--wcs\r\nContent-Type: text/xml\r\nContent-ID: wcs\r\n\r\n<gml:RectifiedGridCoverage/>\r\n--wcs\r\nContent-Type: image/x-aaigrid\r\nContent-Description: coverage data\r\nContent-Transfer-Encoding: binary\r\nContent-ID: coverage/out.asc\r\n\r\nncols 2\nnrows 1\nxllcorner 1000\nyllcorner 2000\ncellsize 1\n7 8\n\r\n--wcs--\r\n";
+        let parts = multipart_parts(body).unwrap();
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0], b"<gml:RectifiedGridCoverage/>");
+        let g = read_grid(body, (1000.0, 2000.0, 1002.0, 2001.0)).unwrap();
+        assert_eq!(g.at(1001.5, 2000.5), Some(8.0));
+
+        // Bare \n line endings and a GeoTIFF part.
+        let tif = encode_geotiff(&grid(0.0, 1.0, 1, 1, 1.0, |_, _| 5.0));
+        let mut body = b"--b\nContent-Type: image/tiff\n\n".to_vec();
+        body.extend_from_slice(&tif);
+        body.extend_from_slice(b"\n--b--\n");
+        assert_eq!(
+            read_grid(&body, (0.0, 0.0, 1.0, 1.0)).unwrap().at(0.5, 0.5),
+            Some(5.0)
+        );
+
+        let err = read_grid(
+            b"--x\nContent-Type: text/xml\n\n<a/>\n--x--\n",
+            (0.0, 0.0, 1.0, 1.0),
+        )
+        .unwrap_err();
+        assert!(err.contains("no elevation grid"), "{err}");
+        assert!(multipart_parts(b"ncols 1").is_none());
     }
 
     #[test]

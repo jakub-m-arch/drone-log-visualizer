@@ -70,7 +70,16 @@ async fn mock_services() -> (String, Calls) {
                     text.push_str(&row.join(" "));
                     text.push('\n');
                 }
-                return ([("content-type", "text/plain")], text.into_bytes());
+                // Wrapped like GUGiK's WCS 2.0 multipart/related answer.
+                let body = format!(
+                    "--wcs\r\nContent-Type: text/xml\r\nContent-ID: wcs\r\n\r\n<gml:RectifiedGridCoverage/>\r\n\
+                     --wcs\r\nContent-Type: image/x-aaigrid\r\nContent-Description: coverage data\r\n\
+                     Content-Transfer-Encoding: binary\r\nContent-ID: coverage/out.asc\r\n\r\n{text}\r\n--wcs--\r\n"
+                );
+                return (
+                    [("content-type", "multipart/related; boundary=wcs")],
+                    body.into_bytes(),
+                );
             }
             let g = Grid {
                 width: w,
