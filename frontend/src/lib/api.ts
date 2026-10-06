@@ -66,10 +66,15 @@ export interface Telemetry {
   rcDownlinkPct: (number | null)[]
   flightMode: string[]
   isFlying: boolean[]
+  gimbalPitchDeg: number[]
+  isPhoto: boolean[]
+  isRecording: boolean[]
 }
 
 export interface UploadResult {
   created: boolean
+  /** An already imported flight was refreshed by a newer parser version. */
+  reparsed: boolean
   flight: FlightSummary
 }
 

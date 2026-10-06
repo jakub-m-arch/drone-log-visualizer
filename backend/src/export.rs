@@ -10,12 +10,12 @@ pub fn csv(samples: &[Sample]) -> String {
     let mut out = String::from(
         "time_s,timestamp_utc,latitude,longitude,height_m,altitude_m,h_speed_ms,v_speed_ms,\
          yaw_deg,pitch_deg,roll_deg,battery_pct,battery_v,gps_sats,rc_uplink_pct,\
-         rc_downlink_pct,flight_mode,is_flying\n",
+         rc_downlink_pct,flight_mode,is_flying,gimbal_pitch_deg,is_photo,is_recording\n",
     );
     for s in samples {
         let _ = writeln!(
             out,
-            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             s.t,
             s.timestamp_ms.and_then(iso_time).unwrap_or_default(),
             opt(s.lat),
@@ -34,6 +34,9 @@ pub fn csv(samples: &[Sample]) -> String {
             opt(s.rc_downlink_pct),
             csv_field(&s.flight_mode),
             s.is_flying,
+            s.gimbal_pitch_deg,
+            s.is_photo,
+            s.is_recording,
         );
     }
     out

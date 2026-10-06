@@ -4,7 +4,12 @@
   import type { Telemetry } from '../lib/api'
   import { formatDuration } from '../lib/format'
 
-  let { tel, time, onSeek }: { tel: Telemetry; time: number; onSeek: (t: number) => void } = $props()
+  let {
+    tel,
+    time,
+    cursor,
+    onSeek,
+  }: { tel: Telemetry; time: number; cursor: number; onSeek: (t: number) => void } = $props()
 
   interface SeriesDef {
     label: string
@@ -22,6 +27,8 @@
     /** Optional second axis on the right. */
     right?: { scale: string; unit: string; range?: [number, number] }
     range?: [number, number]
+    /** Hide the chart when every value is 0 (e.g. flights imported before the data existed). */
+    hideIfAllZero?: boolean
   }
 
   const charts: ChartDef[] = $derived([
@@ -52,6 +59,13 @@
       title: 'GPS satellites',
       unit: '',
       series: [{ label: 'Satellites', values: tel.gpsSats, color: '#14b8a6', digits: 0, stepped: true }],
+    },
+    {
+      title: 'Gimbal pitch',
+      unit: '°',
+      range: [-90, 30],
+      hideIfAllZero: true,
+      series: [{ label: 'Pitch (°)', values: tel.gimbalPitchDeg ?? [], color: '#0ea5e9' }],
     },
     {
       title: 'RC signal',
@@ -98,6 +112,7 @@
     for (const def of charts) {
       const series = def.series.filter((s) => hasData(s.values))
       if (!series.length) continue
+      if (def.hideIfAllZero && series.every((s) => s.values.every((v) => !v))) continue
 
       const wrap = document.createElement('div')
       wrap.className = 'chart'
@@ -222,7 +237,12 @@
   $effect(() => {
     // Track `time` and keep playheads in place.
     void time
-    plots.forEach((p, i) => placePlayhead(p, playheads[i]))
+    const idx = cursor
+    plots.forEach((p, i) => {
+      placePlayhead(p, playheads[i])
+      // While the mouse is not over a chart, the legend shows playhead values.
+      if (p.cursor.left == null || p.cursor.left < 0) p.setLegend({ idx })
+    })
   })
 </script>
 

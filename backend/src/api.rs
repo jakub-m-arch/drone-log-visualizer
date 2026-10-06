@@ -58,6 +58,7 @@ async fn list_flights(State(state): State<AppState>) -> AppResult<Json<Vec<Fligh
 #[serde(rename_all = "camelCase")]
 struct UploadResponse {
     created: bool,
+    reparsed: bool,
     flight: FlightSummary,
 }
 
@@ -91,6 +92,7 @@ async fn upload(State(state): State<AppState>, mut multipart: Multipart) -> AppR
             status,
             Json(UploadResponse {
                 created: outcome.created,
+                reparsed: outcome.reparsed,
                 flight,
             }),
         )
@@ -156,6 +158,9 @@ struct Telemetry {
     rc_downlink_pct: Vec<Option<f64>>,
     flight_mode: Vec<String>,
     is_flying: Vec<bool>,
+    gimbal_pitch_deg: Vec<f64>,
+    is_photo: Vec<bool>,
+    is_recording: Vec<bool>,
 }
 
 async fn telemetry(
@@ -182,6 +187,9 @@ async fn telemetry(
         out.rc_downlink_pct.push(s.rc_downlink_pct);
         out.flight_mode.push(s.flight_mode);
         out.is_flying.push(s.is_flying);
+        out.gimbal_pitch_deg.push(s.gimbal_pitch_deg);
+        out.is_photo.push(s.is_photo);
+        out.is_recording.push(s.is_recording);
     }
     Ok(Json(out))
 }

@@ -15,11 +15,18 @@ pub const MAX_SUPPORTED_VERSION: u8 = 14;
 /// First version whose records are AES-encrypted with keys from the DJI API.
 pub const FIRST_ENCRYPTED_VERSION: u8 = 13;
 
+/// Version of the parse/mapping code. Bump it when `flight.rs` starts
+/// extracting new data: re-uploading a file then refreshes flights stored by
+/// an older version instead of reporting a plain duplicate.
+pub const PARSE_VERSION: i64 = 2;
+
 #[derive(Debug)]
 pub struct IngestOutcome {
     pub id: i64,
     /// `false` when the identical file had already been imported.
     pub created: bool,
+    /// An existing flight was re-parsed with the current `PARSE_VERSION`.
+    pub reparsed: bool,
 }
 
 pub async fn ingest(state: &AppState, file_name: &str, bytes: Vec<u8>) -> AppResult<IngestOutcome> {
@@ -27,14 +34,40 @@ pub async fn ingest(state: &AppState, file_name: &str, bytes: Vec<u8>) -> AppRes
         return Err(AppError::BadRequest("The uploaded file is empty.".into()));
     }
     let sha256 = hex::encode(Sha256::digest(&bytes));
-    if let Some(id) = db::find_by_hash(&state.pool, &sha256).await? {
-        return Ok(IngestOutcome { id, created: false });
+    if let Some((id, version)) = db::find_by_hash(&state.pool, &sha256).await? {
+        let mut outcome = IngestOutcome {
+            id,
+            created: false,
+            reparsed: false,
+        };
+        if version < PARSE_VERSION {
+            // Best effort: if parsing fails now (e.g. the API key was removed),
+            // keep the data that is already stored.
+            match parse(state, bytes).await {
+                Ok(flight) => {
+                    db::replace_flight(&state.pool, id, PARSE_VERSION, &flight).await?;
+                    tracing::info!(id, from = version, to = PARSE_VERSION, "re-parsed flight");
+                    outcome.reparsed = true;
+                }
+                Err(e) => tracing::warn!(id, code = e.code(), "re-parse failed, keeping old data"),
+            }
+        }
+        return Ok(outcome);
     }
 
     let size = bytes.len();
     let flight = parse(state, bytes).await?;
 
-    match db::insert_flight(&state.pool, file_name, &sha256, size, &flight).await {
+    match db::insert_flight(
+        &state.pool,
+        file_name,
+        &sha256,
+        size,
+        PARSE_VERSION,
+        &flight,
+    )
+    .await
+    {
         Ok(id) => {
             tracing::info!(
                 id,
@@ -42,11 +75,19 @@ pub async fn ingest(state: &AppState, file_name: &str, bytes: Vec<u8>) -> AppRes
                 samples = flight.meta.sample_count,
                 "imported flight log"
             );
-            Ok(IngestOutcome { id, created: true })
+            Ok(IngestOutcome {
+                id,
+                created: true,
+                reparsed: false,
+            })
         }
         // Lost a race against a concurrent upload of the same file.
         Err(e) => match db::find_by_hash(&state.pool, &sha256).await? {
-            Some(id) => Ok(IngestOutcome { id, created: false }),
+            Some((id, _)) => Ok(IngestOutcome {
+                id,
+                created: false,
+                reparsed: false,
+            }),
             None => Err(e),
         },
     }

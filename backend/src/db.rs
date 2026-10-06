@@ -48,12 +48,13 @@ pub struct FlightSummary {
     pub meta: FlightMeta,
 }
 
-pub async fn find_by_hash(pool: &SqlitePool, sha256: &str) -> AppResult<Option<i64>> {
-    let row = sqlx::query("SELECT id FROM flights WHERE file_sha256 = ?")
+/// Id and `parse_version` of the flight imported from a file with this hash.
+pub async fn find_by_hash(pool: &SqlitePool, sha256: &str) -> AppResult<Option<(i64, i64)>> {
+    let row = sqlx::query("SELECT id, parse_version FROM flights WHERE file_sha256 = ?")
         .bind(sha256)
         .fetch_optional(pool)
         .await?;
-    Ok(row.map(|r| r.get::<i64, _>(0)))
+    Ok(row.map(|r| (r.get::<i64, _>(0), r.get::<i64, _>(1))))
 }
 
 pub async fn insert_flight(
@@ -61,23 +62,75 @@ pub async fn insert_flight(
     file_name: &str,
     sha256: &str,
     file_size: usize,
+    parse_version: i64,
     flight: &ParsedFlight,
 ) -> AppResult<i64> {
-    let m = &flight.meta;
     let mut tx = pool.begin().await?;
     let id: i64 = sqlx::query(
         "INSERT INTO flights (file_name, file_sha256, file_size, uploaded_at, log_version, encrypted,
             aircraft_name, aircraft_sn, product_type, app_platform, app_version, start_time,
             duration_s, distance_m, max_height_m, max_h_speed_ms, max_v_speed_ms,
             home_lat, home_lon, takeoff_lat, takeoff_lon, landing_lat, landing_lon,
-            location, sample_count)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            location, sample_count, parse_version)
+         VALUES (?, ?, ?, ?, 0, 0, '', '', '', '', '', NULL, 0, 0, 0, 0, 0,
+            NULL, NULL, NULL, NULL, NULL, NULL, '', 0, ?)
          RETURNING id",
     )
     .bind(file_name)
     .bind(sha256)
     .bind(file_size as i64)
     .bind(Utc::now().to_rfc3339())
+    .bind(parse_version)
+    .fetch_one(&mut *tx)
+    .await?
+    .get(0);
+    write_flight_data(&mut tx, id, flight).await?;
+    tx.commit().await?;
+    Ok(id)
+}
+
+/// Replaces the parsed data of an existing flight (re-import after the
+/// parser/mapping changed), keeping its id and upload metadata.
+pub async fn replace_flight(
+    pool: &SqlitePool,
+    id: i64,
+    parse_version: i64,
+    flight: &ParsedFlight,
+) -> AppResult<()> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM samples WHERE flight_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM events WHERE flight_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("UPDATE flights SET parse_version = ? WHERE id = ?")
+        .bind(parse_version)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    write_flight_data(&mut tx, id, flight).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Writes the summary columns, samples and events of flight `id`.
+async fn write_flight_data(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    id: i64,
+    flight: &ParsedFlight,
+) -> AppResult<()> {
+    let m = &flight.meta;
+    sqlx::query(
+        "UPDATE flights SET log_version = ?, encrypted = ?, aircraft_name = ?, aircraft_sn = ?,
+            product_type = ?, app_platform = ?, app_version = ?, start_time = ?,
+            duration_s = ?, distance_m = ?, max_height_m = ?, max_h_speed_ms = ?, max_v_speed_ms = ?,
+            home_lat = ?, home_lon = ?, takeoff_lat = ?, takeoff_lon = ?, landing_lat = ?,
+            landing_lon = ?, location = ?, sample_count = ?
+         WHERE id = ?",
+    )
     .bind(m.log_version as i64)
     .bind(m.encrypted)
     .bind(&m.aircraft_name)
@@ -99,16 +152,17 @@ pub async fn insert_flight(
     .bind(m.landing_lon)
     .bind(&m.location)
     .bind(m.sample_count as i64)
-    .fetch_one(&mut *tx)
-    .await?
-    .get(0);
+    .bind(id)
+    .execute(&mut **tx)
+    .await?;
 
     for (idx, s) in flight.samples.iter().enumerate() {
         sqlx::query(
             "INSERT INTO samples (flight_id, idx, t, timestamp_ms, lat, lon, height_m, altitude_m,
                 h_speed_ms, v_speed_ms, yaw_deg, pitch_deg, roll_deg, battery_pct, battery_v,
-                gps_sats, rc_uplink_pct, rc_downlink_pct, flight_mode, is_flying)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                gps_sats, rc_uplink_pct, rc_downlink_pct, flight_mode, is_flying,
+                gimbal_pitch_deg, is_photo, is_recording)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(id)
         .bind(idx as i64)
@@ -130,7 +184,10 @@ pub async fn insert_flight(
         .bind(s.rc_downlink_pct)
         .bind(&s.flight_mode)
         .bind(s.is_flying)
-        .execute(&mut *tx)
+        .bind(s.gimbal_pitch_deg)
+        .bind(s.is_photo)
+        .bind(s.is_recording)
+        .execute(&mut **tx)
         .await?;
     }
 
@@ -143,12 +200,10 @@ pub async fn insert_flight(
         .bind(e.t)
         .bind(e.level.as_str())
         .bind(&e.message)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
     }
-
-    tx.commit().await?;
-    Ok(id)
+    Ok(())
 }
 
 macro_rules! summary_columns {
@@ -235,7 +290,8 @@ pub async fn get_samples(pool: &SqlitePool, id: i64) -> AppResult<Vec<Sample>> {
     let rows = sqlx::query(
         "SELECT t, timestamp_ms, lat, lon, height_m, altitude_m, h_speed_ms, v_speed_ms,
             yaw_deg, pitch_deg, roll_deg, battery_pct, battery_v, gps_sats,
-            rc_uplink_pct, rc_downlink_pct, flight_mode, is_flying
+            rc_uplink_pct, rc_downlink_pct, flight_mode, is_flying,
+            gimbal_pitch_deg, is_photo, is_recording
          FROM samples WHERE flight_id = ? ORDER BY idx",
     )
     .bind(id)
@@ -262,6 +318,9 @@ pub async fn get_samples(pool: &SqlitePool, id: i64) -> AppResult<Vec<Sample>> {
             rc_downlink_pct: r.get("rc_downlink_pct"),
             flight_mode: r.get("flight_mode"),
             is_flying: r.get("is_flying"),
+            gimbal_pitch_deg: r.get("gimbal_pitch_deg"),
+            is_photo: r.get("is_photo"),
+            is_recording: r.get("is_recording"),
         })
         .collect())
 }

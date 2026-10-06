@@ -4,7 +4,7 @@
 
   let { config, onImported }: { config: AppConfig; onImported: () => void } = $props()
 
-  type Status = 'queued' | 'uploading' | 'parsing' | 'done' | 'duplicate' | 'error'
+  type Status = 'queued' | 'uploading' | 'parsing' | 'done' | 'updated' | 'duplicate' | 'error'
 
   interface Item {
     file: File
@@ -24,7 +24,9 @@
   let folderInput: HTMLInputElement
 
   const count = (s: Status) => items.filter((i) => i.status === s).length
-  const finished = $derived(items.filter((i) => ['done', 'duplicate', 'error'].includes(i.status)).length)
+  const finished = $derived(
+    items.filter((i) => ['done', 'updated', 'duplicate', 'error'].includes(i.status)).length,
+  )
   const current = $derived(items.find((i) => i.status === 'uploading' || i.status === 'parsing'))
 
   // Failures grouped by error code, so 100 logs without a key show one message.
@@ -66,9 +68,9 @@
           it.progress = p
           if (p >= 1) it.status = 'parsing'
         })
-        it.status = result.created ? 'done' : 'duplicate'
+        it.status = result.created ? 'done' : result.reparsed ? 'updated' : 'duplicate'
         it.flightId = result.flight.id
-        if (result.created && ++sinceRefresh >= 10) {
+        if ((result.created || result.reparsed) && ++sinceRefresh >= 10) {
           sinceRefresh = 0
           onImported()
         }
@@ -103,6 +105,8 @@
         return 'Parsing…'
       case 'done':
         return 'Imported'
+      case 'updated':
+        return 'Updated with new data'
       case 'duplicate':
         return 'Already imported'
       case 'error':
@@ -147,6 +151,7 @@
       {/if}
       <span class="chips">
         <span class="chip ok">{count('done')} imported</span>
+        {#if count('updated')}<span class="chip ok">{count('updated')} updated</span>{/if}
         {#if count('duplicate')}<span class="chip">{count('duplicate')} already imported</span>{/if}
         {#if count('error')}<span class="chip err">{count('error')} failed</span>{/if}
         {#if skipped}<span class="chip">{skipped} other files skipped</span>{/if}

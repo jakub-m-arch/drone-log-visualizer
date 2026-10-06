@@ -351,3 +351,51 @@ async fn config_reports_key_presence_but_never_the_key() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body["error"]["code"], "not_found");
 }
+
+#[tokio::test]
+async fn reupload_reparses_flights_from_older_parser_versions() {
+    let pool = db::connect_memory().await.unwrap();
+    let app = app(AppState::new(
+        pool.clone(),
+        config(None, "http://127.0.0.1:9/unused"),
+    ));
+    let log = SynthFlight::demo().to_bytes();
+    let (status, body) = send_json(&app, multipart("a.txt", &log)).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let id = body["flight"]["id"].as_i64().unwrap();
+
+    // Current version: a plain duplicate.
+    let (_, body) = send_json(&app, multipart("a.txt", &log)).await;
+    assert_eq!(body["reparsed"], false);
+
+    // Simulate a flight stored by an older release without camera data.
+    sqlx::query("UPDATE flights SET parse_version = 1 WHERE id = ?")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE samples SET gimbal_pitch_deg = 0, is_photo = 0")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM events")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let (status, body) = send_json(&app, multipart("a.txt", &log)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["created"], false);
+    assert_eq!(body["reparsed"], true);
+    assert_eq!(body["flight"]["id"].as_i64().unwrap(), id, "id is kept");
+
+    let (_, tel) = send_json(&app, get(&format!("/api/flights/{id}/telemetry"))).await;
+    assert_eq!(tel["gimbalPitchDeg"][300], -90.0);
+    assert_eq!(tel["isPhoto"][250], true);
+    assert_eq!(tel["t"].as_array().unwrap().len(), 600);
+    let (_, detail) = send_json(&app, get(&format!("/api/flights/{id}"))).await;
+    let events = detail["events"].as_array().unwrap();
+    assert!(events.iter().any(|e| e["message"] == "Photo taken"));
+    let (_, list) = send_json(&app, get("/api/flights")).await;
+    assert_eq!(list.as_array().unwrap().len(), 1);
+}

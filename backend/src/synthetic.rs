@@ -21,11 +21,13 @@ const PREFIX_SIZE: usize = 100;
 
 const REC_OSD: u8 = 1;
 const REC_HOME: u8 = 2;
+const REC_GIMBAL: u8 = 3;
 const REC_CUSTOM: u8 = 5;
 const REC_CENTER_BATTERY: u8 = 7;
 const REC_APP_TIP: u8 = 9;
 const REC_APP_WARN: u8 = 10;
 const REC_OFDM: u8 = 49;
+const REC_CAMERA: u8 = 25;
 
 /// Product type byte for "Mavic Pro" (3 battery cells).
 const PRODUCT_MAVIC_PRO: u8 = 13;
@@ -51,6 +53,9 @@ pub struct SynthSample {
     pub on_ground: bool,
     pub tip: Option<String>,
     pub warn: Option<String>,
+    pub gimbal_pitch_deg: f32,
+    pub photo: bool,
+    pub recording: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -121,6 +126,16 @@ impl SynthFlight {
                 on_ground,
                 tip,
                 warn,
+                // Look down for the first pass, straight down over the far end.
+                gimbal_pitch_deg: match t {
+                    t if on_ground || t < 15.0 => 0.0,
+                    t if (28.0..33.0).contains(&t) => -90.0,
+                    _ => -30.0,
+                },
+                // One photo spanning two samples at 25 s, another at 35 s.
+                photo: matches!(i, 250 | 251 | 350),
+                // Video from 15 s to 30 s.
+                recording: (150..300).contains(&i),
             });
         }
 
@@ -193,6 +208,8 @@ impl SynthFlight {
                 w.push(REC_CENTER_BATTERY, &battery_payload(s));
             }
             w.push(REC_CUSTOM, &custom_payload(s));
+            w.push(REC_GIMBAL, &gimbal_payload(s));
+            w.push(REC_CAMERA, &camera_payload(s));
             w.push(REC_OFDM, &[s.rc_signal.min(127) | 0x80]);
             w.push(REC_OFDM, &[s.rc_signal.min(127)]);
             if let Some(tip) = &s.tip {
@@ -312,9 +329,11 @@ impl SynthKeys {
 }
 
 const ENCRYPTED_VERSION: u8 = 14;
-const ENCRYPTED_RECORD_TYPES: [u8; 7] = [
+const ENCRYPTED_RECORD_TYPES: [u8; 9] = [
     REC_OSD,
     REC_HOME,
+    REC_GIMBAL,
+    REC_CAMERA,
     REC_CUSTOM,
     REC_CENTER_BATTERY,
     REC_APP_TIP,
@@ -449,6 +468,28 @@ fn osd_payload(s: &SynthSample) -> Vec<u8> {
     p
 }
 
+fn gimbal_payload(s: &SynthSample) -> Vec<u8> {
+    let mut p = Vec::with_capacity(16);
+    p.extend_from_slice(&deci(s.gimbal_pitch_deg));
+    p.extend_from_slice(&deci(0.0)); // roll
+    p.extend_from_slice(&deci(s.yaw_deg));
+    p.push(0); // mode / reset
+    p.push(0); // roll adjust
+    p.extend_from_slice(&deci(0.0)); // yaw angle
+    p.push(0); // limits / calibration flags
+    p.push(0); // version / double click
+    p.resize(16, 0);
+    p
+}
+
+fn camera_payload(s: &SynthSample) -> Vec<u8> {
+    let mut p = vec![0u8; 32];
+    // bitpack1: connected, single photo (bits 3-5 == 1), recording (bits 6-7).
+    p[0] = 0x01 | if s.photo { 0x08 } else { 0 } | if s.recording { 0x40 } else { 0 };
+    p[1] = 0x02; // SD card inserted
+    p
+}
+
 fn custom_payload(s: &SynthSample) -> Vec<u8> {
     let mut p = Vec::with_capacity(18);
     p.push(0);
@@ -509,6 +550,9 @@ mod tests {
             assert_eq!(x.battery.voltage, y.battery.voltage);
             assert_eq!(x.rc.uplink_signal, y.rc.uplink_signal);
             assert_eq!(x.app.warn, y.app.warn);
+            assert_eq!(x.gimbal.pitch, y.gimbal.pitch);
+            assert_eq!(x.camera.is_photo, y.camera.is_photo);
+            assert_eq!(x.camera.is_video, y.camera.is_video);
         }
     }
 

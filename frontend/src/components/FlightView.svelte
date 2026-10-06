@@ -49,6 +49,8 @@
       sats: tel.gpsSats[i],
       rc: tel.rcDownlinkPct[i] ?? tel.rcUplinkPct[i],
       mode: tel.flightMode[i],
+      gimbal: tel.gimbalPitchDeg?.[i] ?? null,
+      recording: tel.isRecording?.[i] ?? false,
       fromHome,
     }
   })
@@ -159,7 +161,7 @@
   <div class="layout">
     <div class="left">
       <div class="map-wrap card">
-        <FlightMap {config} flight={f} {tel} {cursor} {follow} />
+        <FlightMap {config} flight={f} {tel} {cursor} {follow} onSeek={seek} />
         {#if hud}
           <div class="hud">
             <div><span>Height</span>{formatNumber(hud.height, 1, 'm')}</div>
@@ -170,6 +172,8 @@
             <div><span>GPS</span>{hud.sats} sats</div>
             <div><span>Signal</span>{formatNumber(hud.rc, 0, '%')}</div>
             <div><span>Mode</span>{humanizeEnum(hud.mode)}</div>
+            <div><span>Gimbal</span>{formatNumber(hud.gimbal, 0, '°')}</div>
+            <div><span>Camera</span>{#if hud.recording}<b class="rec">● REC</b>{:else}–{/if}</div>
           </div>
         {/if}
       </div>
@@ -220,7 +224,7 @@
     </div>
 
     <div class="right card">
-      <Charts {tel} {time} onSeek={seek} />
+      <Charts {tel} {time} {cursor} onSeek={seek} />
     </div>
   </div>
   <p class="muted keys">Keyboard: Space play/pause · ←/→ ±5 s · Shift+←/→ ±30 s</p>
@@ -308,6 +312,9 @@
     border: 1px solid var(--border);
     border-radius: 8px;
     pointer-events: none;
+  }
+  .hud .rec {
+    color: #e11d48;
   }
   .hud span {
     display: block;
