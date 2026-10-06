@@ -14,6 +14,8 @@ Runs locally as a single Docker container; your logs never leave your machine
   - track on an OpenStreetMap map with take-off, landing and home point,
     optionally colored by height, speed or battery; photo positions and
     video-recording sections are marked
+  - 3D view: the track as a ribbon at its real height with a curtain down to
+    the ground, over terrain (free AWS Terrain Tiles, no key) or flat ground
   - timeline slider and playback (1×–50×) with the aircraft moving along the track
   - synchronized charts: height, horizontal/vertical speed, battery (% and V),
     GPS satellites, gimbal pitch, RC signal — drag to zoom, click to jump;
@@ -110,11 +112,20 @@ Set in `.env` (read by `docker compose`) or as container environment variables.
 | `MAX_UPLOAD_MB` | `200` | Maximum size of an uploaded log |
 | `MAP_TILE_URL` | OSM | Raster tile URL template (`{z}/{x}/{y}`) |
 | `MAP_ATTRIBUTION` | OSM | Attribution HTML shown on the map |
+| `MAP_TERRAIN_URL` | AWS Terrain Tiles | Raster DEM tiles for the 3D view; `off` = flat 3D |
+| `MAP_TERRAIN_ENCODING` | `terrarium` | `terrarium` or `mapbox` (Terrain-RGB) |
+| `MAP_TERRAIN_ATTRIBUTION` | Mapzen | Attribution HTML for the elevation data |
 | `RUST_LOG` | `info` | Log level |
 
 The default map uses the public OpenStreetMap tile servers, which is fine for
 personal use under the [OSM tile usage policy](https://operations.osmfoundation.org/policies/tiles/).
 Point `MAP_TILE_URL` at another provider or your own tile server for heavier use.
+
+The 3D view loads elevation from the public
+[AWS Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) dataset
+(Terrarium encoding, no key). Heights in DJI logs are relative to the take-off
+point, so the track is placed relative to the terrain at take-off; terrain
+resolution (~10–30 m) limits accuracy close to the ground.
 
 ## Supported logs and errors
 

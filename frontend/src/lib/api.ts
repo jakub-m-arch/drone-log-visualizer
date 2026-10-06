@@ -7,6 +7,10 @@ export interface AppConfig {
   maxUploadMb: number
   mapTileUrl: string
   mapAttribution: string
+  /** Raster DEM tile URL for the 3D view, or null for flat 3D. */
+  terrainUrl: string | null
+  terrainEncoding: 'terrarium' | 'mapbox'
+  terrainAttribution: string
 }
 
 export interface FlightSummary {

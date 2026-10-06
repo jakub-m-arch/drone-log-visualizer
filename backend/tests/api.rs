@@ -28,6 +28,9 @@ fn config(api_key: Option<&str>, endpoint: &str) -> Config {
         keychain_endpoint: endpoint.into(),
         map_tile_url: "https://tiles.example/{z}/{x}/{y}.png".into(),
         map_attribution: "test".into(),
+        terrain_url: None,
+        terrain_encoding: "terrarium".into(),
+        terrain_attribution: "test".into(),
     }
 }
 

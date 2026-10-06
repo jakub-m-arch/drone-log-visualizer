@@ -17,11 +17,13 @@
     coloredTrack,
     colorModes,
     photoPoints,
+    pointColors,
     rampCss,
     recordingSegments,
     type ColorMode,
   } from '../lib/trackColor'
   import { formatNumber } from '../lib/format'
+  import { buildWalls, droneBox, sampleIndices, type GroundAt } from '../lib/track3d'
 
   let {
     config,
@@ -61,6 +63,84 @@
       /* storage unavailable */
     }
     return 'plain'
+  }
+
+  // ---- 3D view ------------------------------------------------------------
+  const VIEW_KEY = 'mapView3d'
+  let is3d = $state(loadBool(VIEW_KEY))
+  const hasTerrain = $derived(!!config.terrainUrl)
+  /** Ground elevation at take-off, once terrain tiles are available. */
+  let takeoffGround: number | null = null
+  let wallsSignature = ''
+
+  function loadBool(key: string): boolean {
+    try {
+      return localStorage.getItem(key) === '1'
+    } catch {
+      return false
+    }
+  }
+
+  function toggle3d() {
+    is3d = !is3d
+    try {
+      localStorage.setItem(VIEW_KEY, is3d ? '1' : '0')
+    } catch {
+      /* storage unavailable */
+    }
+  }
+
+  function groundLookup(): GroundAt | undefined {
+    if (!map || !is3d || !hasTerrain) return undefined
+    const m = map
+    return (p) => m.queryTerrainElevation(p)
+  }
+
+  /** (Re)builds the 3D ribbon and curtain; skipped when nothing changed. */
+  function updateWalls(force = false) {
+    if (!map || !ready || !is3d || track.coords.length < 2) return
+    const idx = sampleIndices(track.coords.length, 1500)
+    const coords = idx.map((k) => track.coords[k])
+    const heights = idx.map((k) => tel.heightM[track.idx[k]] ?? 0)
+    const all = pointColors(tel, track, colorMode)
+    const colors = idx.map((k) => all?.[k] ?? '#ff6a00')
+    const groundAt = groundLookup()
+    takeoffGround = groundAt ? groundAt(track.coords[0]) : null
+    const grounds = groundAt ? coords.map((c) => Math.round(groundAt(c) ?? -9999)) : []
+    const signature = `${colorMode}|${takeoffGround}|${grounds.join(',')}`
+    if (!force && signature === wallsSignature) return
+    wallsSignature = signature
+
+    const opts = { heights, colors, groundAt, takeoffGround }
+    const ribbon = buildWalls(coords, { ...opts, widthM: 3, ribbonM: 2 })
+    const curtain = buildWalls(coords, { ...opts, widthM: 0.8, ribbonM: null })
+    ;(map.getSource('ribbon') as GeoJSONSource).setData({ type: 'FeatureCollection', features: ribbon })
+    ;(map.getSource('curtain') as GeoJSONSource).setData({ type: 'FeatureCollection', features: curtain })
+    // The take-off ground level may have just become known: re-place the aircraft.
+    updateDroneBox()
+  }
+
+  function updateDroneBox() {
+    if (!map || !ready || !is3d || !track.coords.length) return
+    const n = Math.max(1, pointsUpTo(track.idx, cursor))
+    const box = droneBox(track.coords[n - 1], tel.heightM[cursor] ?? 0, 6, groundLookup(), takeoffGround)
+    ;(map.getSource('drone3d') as GeoJSONSource | undefined)?.setData({
+      type: 'FeatureCollection',
+      features: [box],
+    })
+  }
+
+  function apply3d() {
+    if (!map || !ready) return
+    const m = map
+    const vis = is3d ? 'visible' : 'none'
+    for (const id of ['ribbon', 'curtain', 'drone3d']) m.setLayoutProperty(id, 'visibility', vis)
+    if (m.getLayer('hillshade')) m.setLayoutProperty('hillshade', 'visibility', vis)
+    if (hasTerrain) m.setTerrain(is3d ? { source: 'dem', exaggeration: 1 } : null)
+    // The 2D arrow would sit on the ground; in 3D the floating box replaces it.
+    drone?.getElement().style.setProperty('display', is3d ? 'none' : '')
+    m.easeTo({ pitch: is3d ? 60 : 0, bearing: is3d ? m.getBearing() : 0, duration: 600 })
+    updateWalls(true)
   }
 
   function setColorMode(mode: ColorMode) {
@@ -115,6 +195,7 @@
       },
       center: track.coords[0] ?? [0, 0],
       zoom: track.coords.length ? 15 : 1,
+      maxPitch: 80,
       attributionControl: { compact: true },
     })
     map = m
@@ -122,6 +203,26 @@
     m.addControl(new ScaleControl({ unit: 'metric' }), 'bottom-left')
 
     m.on('load', () => {
+      if (config.terrainUrl) {
+        const dem = {
+          type: 'raster-dem' as const,
+          tiles: [config.terrainUrl],
+          encoding: config.terrainEncoding,
+          tileSize: 256,
+          maxzoom: 15,
+          attribution: config.terrainAttribution,
+        }
+        // Separate sources for terrain and hillshade, as MapLibre recommends.
+        m.addSource('dem', dem)
+        m.addSource('dem-hillshade', dem)
+        m.addLayer({
+          id: 'hillshade',
+          type: 'hillshade',
+          source: 'dem-hillshade',
+          layout: { visibility: 'none' },
+          paint: { 'hillshade-exaggeration': 0.4 },
+        })
+      }
       m.addSource('track', { type: 'geojson', data: line(track.coords) })
       m.addSource('flown', { type: 'geojson', data: line([]) })
       m.addSource('colored', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
@@ -184,6 +285,29 @@
           'circle-stroke-width': 2,
         },
       })
+      const empty = { type: 'FeatureCollection' as const, features: [] }
+      m.addSource('curtain', { type: 'geojson', data: empty })
+      m.addSource('ribbon', { type: 'geojson', data: empty })
+      m.addSource('drone3d', { type: 'geojson', data: empty })
+      const extrusion = (id: string, opacity: number) =>
+        m.addLayer({
+          id,
+          type: 'fill-extrusion',
+          source: id,
+          layout: { visibility: 'none' },
+          paint: {
+            'fill-extrusion-color': ['get', 'color'],
+            'fill-extrusion-base': ['get', 'base'],
+            'fill-extrusion-height': ['get', 'top'],
+            'fill-extrusion-opacity': opacity,
+          },
+        })
+      extrusion('curtain', 0.25)
+      extrusion('ribbon', 0.95)
+      extrusion('drone3d', 1)
+      // Terrain tiles arrive asynchronously; refresh the heights once they do.
+      m.on('idle', () => updateWalls())
+
       m.on('click', 'photos', (e) => {
         const t = e.features?.[0]?.properties?.t
         if (typeof t === 'number') onSeek?.(t)
@@ -205,6 +329,7 @@
       const b = bounds(track.coords)
       if (b) m.fitBounds(b, { padding: 50, maxZoom: 17, duration: 0 })
       ready = true
+      if (is3d) apply3d()
     })
 
     const ro = new ResizeObserver(() => m.resize())
@@ -215,6 +340,12 @@
       map = null
       drone = null
     }
+  })
+
+  // Rebuild the 3D track when the color mode changes.
+  $effect(() => {
+    void colorMode
+    if (ready && is3d) updateWalls()
   })
 
   // Switch between the plain orange track and the colored one.
@@ -237,6 +368,7 @@
     const pos = track.coords[n - 1]
     drone.setLngLat(pos)
     drone.setRotation(tel.yawDeg[cursor] ?? 0)
+    if (is3d) updateDroneBox()
     ;(map.getSource('flown') as GeoJSONSource | undefined)?.setData(line(track.coords.slice(0, n)))
     if (follow) map.jumpTo({ center: pos })
   })
@@ -247,6 +379,15 @@
     <div class="nogps">This flight has no GPS positions.</div>
   {:else}
     <div class="legend">
+      <div class="view-toggle" role="group" aria-label="Map view">
+        <button class:active={!is3d} onclick={() => is3d && (toggle3d(), apply3d())}>2D</button>
+        <button class:active={is3d} onclick={() => !is3d && (toggle3d(), apply3d())}>3D</button>
+      </div>
+      {#if is3d}
+        <div class="muted hint">
+          {hasTerrain ? 'Terrain on' : 'Flat ground'} · right-drag / Ctrl+drag to tilt
+        </div>
+      {/if}
       <label>
         Track
         <select value={colorMode} onchange={(e) => setColorMode(e.currentTarget.value as ColorMode)}>
@@ -318,6 +459,31 @@
     border: 1px solid var(--border);
     background: var(--surface);
     color: var(--text);
+  }
+  .view-toggle {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+  .view-toggle button {
+    justify-content: center;
+    padding: 0.15rem 0.4rem;
+    font-size: 0.75rem;
+    border-radius: 0;
+  }
+  .view-toggle button:first-child {
+    border-radius: 6px 0 0 6px;
+  }
+  .view-toggle button:last-child {
+    border-radius: 0 6px 6px 0;
+    border-left: none;
+  }
+  .view-toggle button.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--accent-contrast);
+  }
+  .hint {
+    font-size: 0.7rem;
   }
   .ramp {
     height: 8px;
