@@ -62,6 +62,12 @@ pub struct Sample {
     pub rc_downlink_pct: Option<f64>,
     pub flight_mode: String,
     pub is_flying: bool,
+    /// Gimbal pitch, degrees (0 = horizon, -90 = straight down).
+    pub gimbal_pitch_deg: f64,
+    /// A photo was taken during this sample.
+    pub is_photo: bool,
+    /// The camera was recording video during this sample.
+    pub is_recording: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -153,6 +159,9 @@ fn frame_to_sample(f: &Frame, t: f64, timestamp_ms: Option<i64>) -> Sample {
             .map(|m| format!("{m:?}"))
             .unwrap_or_default(),
         is_flying: !f.osd.is_on_ground || f.osd.height.abs() > 0.5,
+        gimbal_pitch_deg: round(f.gimbal.pitch as f64, 1),
+        is_photo: f.camera.is_photo,
+        is_recording: f.camera.is_video,
     }
 }
 
@@ -261,6 +270,8 @@ pub fn extract_events(frames: &[Frame], samples: &[Sample]) -> Vec<Event> {
     };
 
     let mut was_flying = false;
+    let mut was_photo = false;
+    let mut was_recording = false;
     for (f, s) in frames.iter().zip(samples) {
         if s.is_flying && !was_flying {
             push(&mut events, s.t, EventLevel::Info, "Take-off");
@@ -268,6 +279,29 @@ pub fn extract_events(frames: &[Frame], samples: &[Sample]) -> Vec<Event> {
             push(&mut events, s.t, EventLevel::Info, "Landing");
         }
         was_flying = s.is_flying;
+
+        // A photo usually spans a few consecutive samples: report its start.
+        if s.is_photo && !was_photo {
+            events.push(Event {
+                t: s.t,
+                level: EventLevel::Info,
+                message: "Photo taken".into(),
+            });
+        }
+        was_photo = s.is_photo;
+        if s.is_recording != was_recording {
+            let msg = if s.is_recording {
+                "Video recording started"
+            } else {
+                "Video recording stopped"
+            };
+            events.push(Event {
+                t: s.t,
+                level: EventLevel::Info,
+                message: msg.into(),
+            });
+        }
+        was_recording = s.is_recording;
 
         for msg in f.app.tip.split("; ") {
             push(&mut events, s.t, EventLevel::Info, msg);
@@ -533,6 +567,16 @@ mod tests {
         assert_eq!(s.battery_pct, Some(85.0));
         assert!(s.battery_v.unwrap() > 12.0);
         assert!(s.rc_uplink_pct.is_some() && s.rc_downlink_pct.is_some());
+
+        // Camera and gimbal.
+        assert_eq!(flight.samples[300].gimbal_pitch_deg, -90.0);
+        assert_eq!(flight.samples[200].gimbal_pitch_deg, -30.0);
+        assert!(flight.samples[250].is_photo && !flight.samples[249].is_photo);
+        assert!(flight.samples[200].is_recording && !flight.samples[300].is_recording);
+        let count = |m: &str| flight.events.iter().filter(|e| e.message == m).count();
+        assert_eq!(count("Photo taken"), 2, "two-sample photo is one event");
+        assert_eq!(count("Video recording started"), 1);
+        assert_eq!(count("Video recording stopped"), 1);
 
         // Climb phase reports positive vertical speed.
         assert!((flight.samples[100].v_speed_ms - 4.0).abs() < 0.01);
