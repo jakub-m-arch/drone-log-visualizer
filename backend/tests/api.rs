@@ -32,6 +32,9 @@ fn config(api_key: Option<&str>, endpoint: &str) -> Config {
         terrain_encoding: "terrarium".into(),
         terrain_attribution: "test".into(),
         vector_tiles_url: None,
+        overpass_url: None,
+        gugik_nmt_url: None,
+        gugik_nmpt_url: None,
     }
 }
 

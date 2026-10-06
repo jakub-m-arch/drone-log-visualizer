@@ -28,6 +28,26 @@ pub const DEFAULT_TERRAIN_URL: &str =
 /// OpenFreeMap: free OpenMapTiles-schema vector tiles, no key.
 pub const DEFAULT_VECTOR_TILES_URL: &str = "https://tiles.openfreemap.org/planet";
 
+/// Public Overpass instances, tried in order (comma-separated).
+pub const DEFAULT_OVERPASS_URL: &str = "https://overpass-api.de/api/interpreter,https://overpass.kumi.systems/api/interpreter,https://overpass.private.coffee/api/interpreter";
+
+/// GUGiK WCS 2.0 GetCoverage requests for the 1 m NMT and NMPT grids, both
+/// with heights in the Kronsztadt 86 datum so their difference is consistent.
+/// Subset axes in EPSG:2180: `x` = northing, `y` = easting. NMPT's
+/// `image/tiff` output is a colour rendering, so its heights are requested
+/// as an Arc/Info ASCII grid.
+pub const DEFAULT_GUGIK_NMT_URL: &str = "https://mapy.geoportal.gov.pl/wss/service/PZGIK/NMT/GRID1/WCS/DigitalTerrainModelFormatTIFF?SERVICE=WCS&VERSION=2.0.1&REQUEST=GetCoverage&COVERAGEID=DTM_PL-KRON86-NH_TIFF&FORMAT=image/tiff&SUBSET=x({minN},{maxN})&SUBSET=y({minE},{maxE})";
+pub const DEFAULT_GUGIK_NMPT_URL: &str = "https://mapy.geoportal.gov.pl/wss/service/PZGIK/NMPT/GRID1/WCS/DigitalSurfaceModel?SERVICE=WCS&VERSION=2.0.1&REQUEST=GetCoverage&COVERAGEID=DSM_PL-KRON86-NH&FORMAT=image/x-aaigrid&SUBSET=x({minN},{maxN})&SUBSET=y({minE},{maxE})";
+
+/// `off` disables, a value overrides, nothing selects the default.
+fn optional_url(value: Option<String>, default: &str) -> Option<String> {
+    match value {
+        Some(v) if v.eq_ignore_ascii_case("off") => None,
+        Some(v) => Some(v),
+        None => Some(default.into()),
+    }
+}
+
 pub const DEFAULT_KEYCHAIN_ENDPOINT: &str =
     "https://dev.dji.com/openapi/v1/flight-records/keychains";
 
@@ -49,6 +69,13 @@ pub struct Config {
     /// TileJSON URL of OpenMapTiles-schema vector tiles used for 3D buildings
     /// and woods; `None` disables them.
     pub vector_tiles_url: Option<String>,
+    /// Overpass API endpoints (comma-separated, tried in order) for OSM trees;
+    /// `None` disables the layer.
+    pub overpass_url: Option<String>,
+    /// GUGiK NMT (terrain) and NMPT (surface) GeoTIFF request templates with
+    /// `{minE} {minN} {maxE} {maxN}` in EPSG:2180; `None` disables LiDAR.
+    pub gugik_nmt_url: Option<String>,
+    pub gugik_nmpt_url: Option<String>,
 }
 
 impl Config {
@@ -91,6 +118,9 @@ impl Config {
                 }
                 None => "terrarium".into(),
             },
+            overpass_url: optional_url(var("OVERPASS_URL"), DEFAULT_OVERPASS_URL),
+            gugik_nmt_url: optional_url(var("GUGIK_NMT_URL"), DEFAULT_GUGIK_NMT_URL),
+            gugik_nmpt_url: optional_url(var("GUGIK_NMPT_URL"), DEFAULT_GUGIK_NMPT_URL),
             vector_tiles_url: match var("MAP_VECTOR_TILES_URL") {
                 Some(v) if v.eq_ignore_ascii_case("off") => None,
                 Some(v) => Some(v),

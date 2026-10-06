@@ -25,10 +25,15 @@ pub enum AppError {
     DecryptionFailed,
     #[error("DJI API error: {0}")]
     DjiApi(String),
-    #[error("Could not reach the DJI API: {0}")]
+    /// The message names the service, e.g. "the DJI API: connection refused".
+    #[error("Could not reach {0}")]
     Network(String),
     #[error("{0}")]
     BadRequest(String),
+    #[error("{0}")]
+    NotAvailable(String),
+    #[error("{0}")]
+    Upstream(String),
     #[error("The file is too large (limit: {0} MB). Set MAX_UPLOAD_MB to raise the limit.")]
     TooLarge(usize),
     #[error("Not found")]
@@ -48,6 +53,8 @@ impl AppError {
             AppError::DjiApi(_) => "dji_api_error",
             AppError::Network(_) => "network_error",
             AppError::BadRequest(_) => "bad_request",
+            AppError::NotAvailable(_) => "not_available",
+            AppError::Upstream(_) => "upstream_error",
             AppError::TooLarge(_) => "too_large",
             AppError::NotFound => "not_found",
             AppError::Internal(_) => "internal_error",
@@ -61,7 +68,10 @@ impl AppError {
             | AppError::UnsupportedVersion(_)
             | AppError::InvalidLog(_)
             | AppError::DecryptionFailed => StatusCode::UNPROCESSABLE_ENTITY,
-            AppError::DjiApi(_) | AppError::Network(_) => StatusCode::BAD_GATEWAY,
+            AppError::DjiApi(_) | AppError::Network(_) | AppError::Upstream(_) => {
+                StatusCode::BAD_GATEWAY
+            }
+            AppError::NotAvailable(_) => StatusCode::UNPROCESSABLE_ENTITY,
             AppError::BadRequest(_) => StatusCode::BAD_REQUEST,
             AppError::TooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
             AppError::NotFound => StatusCode::NOT_FOUND,
@@ -96,3 +106,26 @@ impl IntoResponse for AppError {
 }
 
 pub type AppResult<T> = Result<T, AppError>;
+
+/// Describes a failed HTTP request including its causes ("dns error",
+/// "connection refused", "invalid peer certificate", "timed out"), which
+/// `reqwest` keeps out of its own message. URLs are stripped; secrets such as
+/// the DJI key travel in headers and are never part of these errors.
+pub fn describe_request_error(e: reqwest::Error) -> String {
+    let timed_out = e.is_timeout();
+    let e = e.without_url();
+    let mut msg = e.to_string();
+    let mut source = std::error::Error::source(&e);
+    while let Some(cause) = source {
+        let text = cause.to_string();
+        if !msg.contains(&text) {
+            msg.push_str(": ");
+            msg.push_str(&text);
+        }
+        source = cause.source();
+    }
+    if timed_out && !msg.contains("timed out") {
+        msg.push_str(" (timed out)");
+    }
+    msg
+}

@@ -28,6 +28,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/flights/{id}", get(get_flight).delete(delete_flight))
         .route("/api/flights/{id}/telemetry", get(telemetry))
         .route("/api/flights/{id}/export/{format}", get(export_flight))
+        .route(
+            "/api/flights/{id}/obstacles/{source}",
+            get(flight_obstacles),
+        )
         .route("/api/{*rest}", get(api_not_found).post(api_not_found))
         .with_state(state)
 }
@@ -51,6 +55,10 @@ async fn config(State(state): State<AppState>) -> Json<serde_json::Value> {
         "terrainEncoding": c.terrain_encoding,
         "terrainAttribution": c.terrain_attribution,
         "vectorTilesUrl": c.vector_tiles_url,
+        "obstacleSources": {
+            "trees": c.overpass_url.is_some(),
+            "lidar": c.gugik_nmt_url.is_some() && c.gugik_nmpt_url.is_some(),
+        },
     }))
 }
 
@@ -196,6 +204,23 @@ async fn telemetry(
         out.is_recording.push(s.is_recording);
     }
     Ok(Json(out))
+}
+
+#[derive(serde::Deserialize)]
+struct ObstacleQuery {
+    #[serde(default)]
+    refresh: bool,
+}
+
+async fn flight_obstacles(
+    State(state): State<AppState>,
+    Path((id, source)): Path<(i64, String)>,
+    axum::extract::Query(q): axum::extract::Query<ObstacleQuery>,
+) -> AppResult<Json<serde_json::Value>> {
+    let source = crate::obstacles::Source::parse(&source)?;
+    Ok(Json(
+        crate::obstacles::for_flight(&state, id, source, q.refresh).await?,
+    ))
 }
 
 async fn export_flight(
