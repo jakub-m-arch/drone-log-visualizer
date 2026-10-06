@@ -1,0 +1,9 @@
+.git
+.github
+.env
+data
+**/node_modules
+**/dist
+**/target
+*.db
+DJIFlightRecord_*.txt
