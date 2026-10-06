@@ -119,7 +119,7 @@ Set in `.env` (read by `docker compose`) or as container environment variables.
 | `MAP_TERRAIN_ENCODING` | `terrarium` | `terrarium` or `mapbox` (Terrain-RGB) |
 | `MAP_TERRAIN_ATTRIBUTION` | Mapzen | Attribution HTML for the elevation data |
 | `MAP_VECTOR_TILES_URL` | OpenFreeMap | TileJSON of OpenMapTiles-schema vector tiles for 3D buildings and woods; `off` disables them |
-| `OVERPASS_URL` | overpass-api.de | Overpass API endpoint for OSM trees; `off` disables the layer |
+| `OVERPASS_URL` | overpass-api.de + 2 mirrors | Overpass API endpoints for OSM trees, comma-separated, tried in order when one is busy; `off` disables the layer |
 | `GUGIK_NMT_URL` / `GUGIK_NMPT_URL` | GUGiK WCS | GeoTIFF request templates for terrain (NMT) and surface (NMPT) models, with `{minE} {minN} {maxE} {maxN}` in EPSG:2180; `off` disables the LiDAR layer |
 | `RUST_LOG` | `info` | Log level |
 

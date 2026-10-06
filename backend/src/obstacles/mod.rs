@@ -15,7 +15,7 @@ use sources::{BBox, LidarRequest};
 /// Margin around the flight track for obstacle queries.
 const MARGIN_M: f64 = 100.0;
 /// Largest area side requested from Overpass.
-const MAX_TREES_SIDE_M: f64 = 5_000.0;
+const MAX_TREES_SIDE_M: f64 = 1_000.0;
 /// Largest area side requested from GUGiK (NMPT is 0.5 m: 4 M cells per km²).
 const MAX_LIDAR_SIDE_M: f64 = 1_000.0;
 

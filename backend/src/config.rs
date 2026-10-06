@@ -28,7 +28,8 @@ pub const DEFAULT_TERRAIN_URL: &str =
 /// OpenFreeMap: free OpenMapTiles-schema vector tiles, no key.
 pub const DEFAULT_VECTOR_TILES_URL: &str = "https://tiles.openfreemap.org/planet";
 
-pub const DEFAULT_OVERPASS_URL: &str = "https://overpass-api.de/api/interpreter";
+/// Public Overpass instances, tried in order (comma-separated).
+pub const DEFAULT_OVERPASS_URL: &str = "https://overpass-api.de/api/interpreter,https://overpass.kumi.systems/api/interpreter,https://overpass.private.coffee/api/interpreter";
 
 /// GUGiK WCS 2.0 GetCoverage requests for the 1 m NMT and NMPT grids, both
 /// with heights in the Kronsztadt 86 datum so their difference is consistent.
@@ -68,7 +69,8 @@ pub struct Config {
     /// TileJSON URL of OpenMapTiles-schema vector tiles used for 3D buildings
     /// and woods; `None` disables them.
     pub vector_tiles_url: Option<String>,
-    /// Overpass API endpoint for OSM trees; `None` disables the layer.
+    /// Overpass API endpoints (comma-separated, tried in order) for OSM trees;
+    /// `None` disables the layer.
     pub overpass_url: Option<String>,
     /// GUGiK NMT (terrain) and NMPT (surface) GeoTIFF request templates with
     /// `{minE} {minN} {maxE} {maxN}` in EPSG:2180; `None` disables LiDAR.

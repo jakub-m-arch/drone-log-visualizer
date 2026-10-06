@@ -146,27 +146,67 @@ pub fn parse_length_m(v: &str) -> Option<f64> {
 
 /// Trees (`natural=tree` nodes) in the box, as GeoJSON points with
 /// `height` / `crown` in metres when mapped.
-pub async fn osm_trees(endpoint: &str, b: BBox) -> AppResult<Value> {
+/// Trees (`natural=tree` nodes) in the box, as GeoJSON points with
+/// `height` / `crown` in metres when mapped.
+///
+/// `endpoints` is a comma-separated list of Overpass interpreters. Public
+/// instances are often busy, so on 429/5xx or connection errors the next one
+/// is tried, and the whole list once more after a pause.
+pub async fn osm_trees(endpoints: &str, b: BBox) -> AppResult<Value> {
     let query = format!(
-        "[out:json][timeout:60];node[\"natural\"=\"tree\"]({},{},{},{});out body 20000;",
+        "[out:json][timeout:25];node[\"natural\"=\"tree\"]({},{},{},{});out body 20000;",
         b.south, b.west, b.north, b.east
     );
-    let res = client()
-        .post(endpoint)
-        .form(&[("data", query)])
-        .send()
-        .await
-        .map_err(|e| upstream("Overpass API", e))?;
-    if !res.status().is_success() {
-        return Err(AppError::Upstream(format!(
-            "Overpass API returned HTTP {} (it may be busy, try again later)",
-            res.status()
-        )));
+    let endpoints: Vec<&str> = endpoints
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+    let mut errors: Vec<String> = Vec::new();
+    let mut body: Option<OverpassResponse> = None;
+    'rounds: for round in 0..2 {
+        if round > 0 {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        }
+        for endpoint in &endpoints {
+            let host = endpoint.split('/').nth(2).unwrap_or(endpoint);
+            match client()
+                .post(*endpoint)
+                .form(&[("data", &query)])
+                .send()
+                .await
+            {
+                Ok(res) if res.status().is_success() => {
+                    match res.json::<OverpassResponse>().await {
+                        Ok(parsed) => {
+                            body = Some(parsed);
+                            break 'rounds;
+                        }
+                        Err(e) => errors.push(format!("{host}: unexpected response ({e})")),
+                    }
+                }
+                Ok(res) => {
+                    let status = res.status();
+                    errors.push(format!("{host}: HTTP {status}"));
+                    // Other client errors (e.g. a bad query) will not improve.
+                    if status.is_client_error() && status.as_u16() != 429 {
+                        break 'rounds;
+                    }
+                }
+                Err(e) => errors.push(format!(
+                    "{host}: {}",
+                    crate::error::describe_request_error(e)
+                )),
+            }
+            tracing::warn!(endpoint = host, "Overpass request failed, trying next");
+        }
     }
-    let body: OverpassResponse = res
-        .json()
-        .await
-        .map_err(|e| AppError::Upstream(format!("Overpass API: unexpected response: {e}")))?;
+    let Some(body) = body else {
+        return Err(AppError::Upstream(format!(
+            "Overpass API is busy or unreachable, try again later ({})",
+            errors.join("; ")
+        )));
+    };
     let features: Vec<Value> = body
         .elements
         .into_iter()

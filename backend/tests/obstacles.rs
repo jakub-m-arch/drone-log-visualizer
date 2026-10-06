@@ -106,6 +106,13 @@ async fn mock_services() -> (String, Calls) {
 
     let router = Router::new()
         .route("/overpass", post(overpass))
+        .route(
+            "/overpass-busy",
+            post(|State(c): State<Calls>| async move {
+                c.overpass.fetch_add(1, Ordering::SeqCst);
+                (StatusCode::GATEWAY_TIMEOUT, "busy")
+            }),
+        )
         .route("/nmt", get(wcs(false)))
         .route("/nmpt", get(wcs(true)))
         .with_state(calls.clone());
@@ -141,6 +148,11 @@ fn config(base: Option<&str>) -> Config {
 async fn setup(base: Option<&str>) -> (axum::Router, i64) {
     let pool = db::connect_memory().await.unwrap();
     let app = app(AppState::new(pool, config(base)));
+    let id = upload(&app).await;
+    (app, id)
+}
+
+async fn upload(app: &Router) -> i64 {
     let log = SynthFlight::demo().to_bytes();
     let boundary = "b";
     let mut body = format!(
@@ -156,9 +168,8 @@ async fn setup(base: Option<&str>) -> (axum::Router, i64) {
         )
         .body(Body::from(body))
         .unwrap();
-    let (_, v) = send(&app, req).await;
-    let id = v["flight"]["id"].as_i64().unwrap();
-    (app, id)
+    let (_, v) = send(app, req).await;
+    v["flight"]["id"].as_i64().unwrap()
 }
 
 async fn send(app: &Router, req: Request<Body>) -> (StatusCode, Value) {
@@ -200,6 +211,25 @@ async fn osm_trees_are_fetched_once_and_cached() {
     .await;
     assert_eq!(v["cached"], false);
     assert_eq!(calls.overpass.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn busy_overpass_falls_back_to_the_next_instance() {
+    let (base, calls) = mock_services().await;
+    let pool = db::connect_memory().await.unwrap();
+    let mut cfg = config(Some(&base));
+    cfg.overpass_url = Some(format!("{base}/overpass-busy, {base}/overpass"));
+    let app = app(AppState::new(pool, cfg));
+    let id = upload(&app).await;
+
+    let (status, v) = get_json(&app, &format!("/api/flights/{id}/obstacles/trees")).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert_eq!(v["data"]["features"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        calls.overpass.load(Ordering::SeqCst),
+        2,
+        "busy one, then the mirror"
+    );
 }
 
 #[tokio::test]
@@ -253,7 +283,7 @@ async fn upstream_failures_are_reported_and_not_cached() {
     let (app, id) = setup(Some("http://127.0.0.1:9")).await;
     let (status, v) = get_json(&app, &format!("/api/flights/{id}/obstacles/trees")).await;
     assert_eq!(status, StatusCode::BAD_GATEWAY, "{v}");
-    assert_eq!(v["error"]["code"], "network_error");
+    assert_eq!(v["error"]["code"], "upstream_error");
     assert!(v["error"]["message"].as_str().unwrap().contains("Overpass"));
 
     // GUGiK: both services named, with the cause, and nothing about DJI.
