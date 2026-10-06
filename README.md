@@ -4,8 +4,12 @@ Self-hosted web app for exploring DJI flight logs (`DJIFlightRecord_*.txt`).
 Runs locally as a single Docker container; your logs never leave your machine
 (except for the decryption-key request described [below](#what-is-sent-to-dji)).
 
-- Drag & drop upload of one or many logs, de-duplicated by content
-- Flight list: date, aircraft model, duration, distance, max height, location
+- Drag & drop upload of single logs or a whole `FlightRecord` folder (subfolders
+  included), with batch progress and errors grouped by cause; re-imports are
+  de-duplicated by content
+- Flight list with totals (flights, flight time, distance, longest flight, max
+  height, period) and a per-aircraft breakdown; filter by aircraft, date range
+  and text, sort by date, duration, distance or height
 - Flight view
   - track on an OpenStreetMap map with take-off, landing and home point
   - timeline slider and playback (1×–50×) with the aircraft moving along the track
