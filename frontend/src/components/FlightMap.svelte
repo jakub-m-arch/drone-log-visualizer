@@ -23,6 +23,7 @@
     type ColorMode,
   } from '../lib/trackColor'
   import { formatNumber } from '../lib/format'
+  import { OBJECTS_SOURCE, objectLayers, type ObjectKind } from '../lib/mapObjects'
   import { buildWalls, droneBox, droneSizeM, sampleIndices, thinByDistance, type GroundAt } from '../lib/track3d'
 
   let {
@@ -74,11 +75,35 @@
   let takeoffGround: number | null = null
   let wallsSignature = ''
 
-  function loadBool(key: string): boolean {
+  function loadBool(key: string, fallback = false): boolean {
     try {
-      return localStorage.getItem(key) === '1'
+      const v = localStorage.getItem(key)
+      return v === null ? fallback : v === '1'
     } catch {
-      return false
+      return fallback
+    }
+  }
+
+  const hasObjects = $derived(!!config.vectorTilesUrl)
+  let showObjects = $state<Record<ObjectKind, boolean>>({
+    buildings: loadBool('map3dBuildings', true),
+    woods: loadBool('map3dWoods', true),
+  })
+
+  function setObjects(kind: ObjectKind, on: boolean) {
+    showObjects[kind] = on
+    try {
+      localStorage.setItem(kind === 'buildings' ? 'map3dBuildings' : 'map3dWoods', on ? '1' : '0')
+    } catch {
+      /* storage unavailable */
+    }
+    applyObjects()
+  }
+
+  function applyObjects() {
+    if (!map || !ready || !hasObjects) return
+    for (const { kind, layer } of objectLayers()) {
+      map.setLayoutProperty(layer.id, 'visibility', is3d && showObjects[kind] ? 'visible' : 'none')
     }
   }
 
@@ -141,6 +166,7 @@
     const m = map
     const vis = is3d ? 'visible' : 'none'
     for (const id of ['ribbon', 'curtain', 'drone3d']) m.setLayoutProperty(id, 'visibility', vis)
+    applyObjects()
     if (m.getLayer('hillshade')) m.setLayoutProperty('hillshade', 'visibility', vis)
     if (hasTerrain) m.setTerrain(is3d ? { source: 'dem', exaggeration: 1 } : null)
     // The 2D arrow would sit on the ground; in 3D the floating box replaces it.
@@ -291,6 +317,11 @@
           'circle-stroke-width': 2,
         },
       })
+      if (config.vectorTilesUrl) {
+        // Buildings and woods sit below the track layers.
+        m.addSource(OBJECTS_SOURCE, { type: 'vector', url: config.vectorTilesUrl })
+        for (const { layer } of objectLayers()) m.addLayer(layer)
+      }
       const empty = { type: 'FeatureCollection' as const, features: [] }
       m.addSource('curtain', { type: 'geojson', data: empty })
       m.addSource('ribbon', { type: 'geojson', data: empty })
@@ -393,6 +424,24 @@
         <div class="muted hint">
           {hasTerrain ? 'Terrain on' : 'Flat ground'} · right-drag / Ctrl+drag to tilt
         </div>
+        {#if hasObjects}
+          <div class="objects">
+            <label title="Heights from OpenStreetMap; buildings without data use a default">
+              <input
+                type="checkbox"
+                checked={showObjects.buildings}
+                onchange={(e) => setObjects('buildings', e.currentTarget.checked)}
+              /> Buildings
+            </label>
+            <label title="Forests and woods, drawn at an assumed 15 m canopy height">
+              <input
+                type="checkbox"
+                checked={showObjects.woods}
+                onchange={(e) => setObjects('woods', e.currentTarget.checked)}
+              /> Woods
+            </label>
+          </div>
+        {/if}
       {/if}
       <label>
         Track
@@ -487,6 +536,15 @@
     background: var(--accent);
     border-color: var(--accent);
     color: var(--accent-contrast);
+  }
+  .objects {
+    display: flex;
+    gap: 0.8rem;
+  }
+  .objects label {
+    justify-content: flex-start;
+    gap: 0.25rem;
+    color: var(--text);
   }
   .hint {
     font-size: 0.7rem;

@@ -15,7 +15,8 @@ Runs locally as a single Docker container; your logs never leave your machine
     optionally colored by height, speed or battery; photo positions and
     video-recording sections are marked
   - 3D view: the track as a ribbon at its real height with a curtain down to
-    the ground, over terrain (free AWS Terrain Tiles, no key) or flat ground
+    the ground, over terrain (free AWS Terrain Tiles, no key) or flat ground,
+    with 3D buildings and woods from OpenStreetMap (free OpenFreeMap tiles)
   - timeline slider and playback (1×–50×) with the aircraft moving along the track
   - synchronized charts: height, horizontal/vertical speed, battery (% and V),
     GPS satellites, gimbal pitch, RC signal — drag to zoom, click to jump;
@@ -115,6 +116,7 @@ Set in `.env` (read by `docker compose`) or as container environment variables.
 | `MAP_TERRAIN_URL` | AWS Terrain Tiles | Raster DEM tiles for the 3D view; `off` = flat 3D |
 | `MAP_TERRAIN_ENCODING` | `terrarium` | `terrarium` or `mapbox` (Terrain-RGB) |
 | `MAP_TERRAIN_ATTRIBUTION` | Mapzen | Attribution HTML for the elevation data |
+| `MAP_VECTOR_TILES_URL` | OpenFreeMap | TileJSON of OpenMapTiles-schema vector tiles for 3D buildings and woods; `off` disables them |
 | `RUST_LOG` | `info` | Log level |
 
 The default map uses the public OpenStreetMap tile servers, which is fine for
@@ -126,6 +128,13 @@ The 3D view loads elevation from the public
 (Terrarium encoding, no key). Heights in DJI logs are relative to the take-off
 point, so the track is placed relative to the terrain at take-off; terrain
 resolution (~10–30 m) limits accuracy close to the ground.
+
+3D buildings and woods come from [OpenFreeMap](https://openfreemap.org/)
+vector tiles (OpenMapTiles schema, OpenStreetMap data, no key). Building
+heights are OSM `height` / `building:levels` where mapped; many buildings
+have no height in OSM and get a 6 m default. Woods have no height data and are
+drawn at an assumed 15 m canopy. Individual trees and power lines are not part
+of these tiles. Treat all of this as context, not as obstacle clearance data.
 
 ## Supported logs and errors
 

@@ -11,6 +11,8 @@ export interface AppConfig {
   terrainUrl: string | null
   terrainEncoding: 'terrarium' | 'mapbox'
   terrainAttribution: string
+  /** TileJSON URL of OpenMapTiles vector tiles for 3D buildings/woods, or null. */
+  vectorTilesUrl: string | null
 }
 
 export interface FlightSummary {

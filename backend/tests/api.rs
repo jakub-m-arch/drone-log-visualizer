@@ -31,6 +31,7 @@ fn config(api_key: Option<&str>, endpoint: &str) -> Config {
         terrain_url: None,
         terrain_encoding: "terrarium".into(),
         terrain_attribution: "test".into(),
+        vector_tiles_url: None,
     }
 }
 

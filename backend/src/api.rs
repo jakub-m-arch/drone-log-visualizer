@@ -50,6 +50,7 @@ async fn config(State(state): State<AppState>) -> Json<serde_json::Value> {
         "terrainUrl": c.terrain_url,
         "terrainEncoding": c.terrain_encoding,
         "terrainAttribution": c.terrain_attribution,
+        "vectorTilesUrl": c.vector_tiles_url,
     }))
 }
 
