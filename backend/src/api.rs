@@ -216,11 +216,23 @@ async fn flight_obstacles(
     State(state): State<AppState>,
     Path((id, source)): Path<(i64, String)>,
     axum::extract::Query(q): axum::extract::Query<ObstacleQuery>,
-) -> AppResult<Json<serde_json::Value>> {
-    let source = crate::obstacles::Source::parse(&source)?;
-    Ok(Json(
-        crate::obstacles::for_flight(&state, id, source, q.refresh).await?,
-    ))
+) -> AppResult<Response> {
+    use crate::obstacles::{Outcome, Source, for_flight};
+    let source = Source::parse(&source)?;
+    Ok(match for_flight(&state, id, source, q.refresh).await? {
+        Outcome::Ready(v) => Json(v).into_response(),
+        // LiDAR still loading in the background: the client polls.
+        Outcome::Loading { done, total } => (
+            StatusCode::ACCEPTED,
+            Json(json!({
+                "source": source.as_str(),
+                "status": "loading",
+                "done": done,
+                "total": total,
+            })),
+        )
+            .into_response(),
+    })
 }
 
 async fn export_flight(

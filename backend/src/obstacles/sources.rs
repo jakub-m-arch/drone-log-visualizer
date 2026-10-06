@@ -2,6 +2,8 @@
 
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use super::puwg92;
@@ -83,23 +85,31 @@ fn upstream(service: &str, e: reqwest::Error) -> AppError {
     ))
 }
 
-/// GET with up to 4 attempts when the request could not be sent (refused or
-/// dropped connections, TLS EOF). GUGiK drops a share of connections even
-/// from curl, so another attempt usually succeeds. HTTP errors and timeouts
-/// are not retried.
-async fn get_with_retry(service: &str, url: &str) -> AppResult<reqwest::Response> {
-    const ATTEMPTS: u32 = 4;
+/// GET with up to 6 attempts when the connection fails before or while the
+/// body is read (refused or dropped connections, TLS EOF). GUGiK drops a
+/// share of connections even from curl, so another attempt usually succeeds.
+/// Timeouts are not retried. Returns the status and the body.
+async fn get_with_retry(service: &str, url: &str) -> AppResult<(reqwest::StatusCode, Vec<u8>)> {
+    const ATTEMPTS: u32 = 6;
     let mut attempt = 1;
     loop {
         // GUGiK can take a while to render a grid.
-        match client_with_timeout(Duration::from_secs(180))
-            .get(url)
-            .send()
-            .await
-        {
-            Ok(res) => return Ok(res),
+        let result = async {
+            let res = client_with_timeout(Duration::from_secs(180))
+                .get(url)
+                .send()
+                .await?;
+            let status = res.status();
+            Ok::<_, reqwest::Error>((status, res.bytes().await?.to_vec()))
+        }
+        .await;
+        match result {
+            Ok(ok) => return Ok(ok),
             Err(e)
-                if attempt < ATTEMPTS && !e.is_timeout() && (e.is_connect() || e.is_request()) =>
+                if attempt < ATTEMPTS
+                    && !e.is_timeout()
+                    && !is_refused(&e)
+                    && (e.is_connect() || e.is_request() || e.is_body()) =>
             {
                 tracing::warn!(
                     service,
@@ -107,12 +117,50 @@ async fn get_with_retry(service: &str, url: &str) -> AppResult<reqwest::Response
                     "request failed, retrying: {}",
                     crate::error::describe_request_error(e)
                 );
-                tokio::time::sleep(Duration::from_millis(1500 * u64::from(attempt))).await;
+                tokio::time::sleep(Duration::from_millis(2000 * u64::from(attempt))).await;
                 attempt += 1;
             }
             Err(e) => return Err(upstream(service, e)),
         }
     }
+}
+
+/// Nothing listens there: retrying will not help.
+fn is_refused(e: &reqwest::Error) -> bool {
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(e);
+    while let Some(err) = source {
+        if let Some(io) = err.downcast_ref::<std::io::Error>()
+            && io.kind() == std::io::ErrorKind::ConnectionRefused
+        {
+            return true;
+        }
+        source = err.source();
+    }
+    false
+}
+
+/// Distance in metres between two (lon, lat) points (equirectangular; fine
+/// at the scale of one flight).
+pub fn distance_m(a: (f64, f64), b: (f64, f64)) -> f64 {
+    let lat = ((a.1 + b.1) / 2.0).to_radians();
+    let dx = (a.0 - b.0) * 111_320.0 * lat.cos();
+    let dy = (a.1 - b.1) * 111_320.0;
+    dx.hypot(dy)
+}
+
+/// Track points within `radius_m` of `centre`, and whether any were dropped.
+pub fn within_radius(
+    points: &[(f64, f64)],
+    centre: (f64, f64),
+    radius_m: f64,
+) -> (Vec<(f64, f64)>, bool) {
+    let kept: Vec<_> = points
+        .iter()
+        .copied()
+        .filter(|&p| distance_m(p, centre) <= radius_m)
+        .collect();
+    let cut = kept.len() < points.len();
+    (kept, cut)
 }
 
 // ---- OSM trees via Overpass -------------------------------------------------
@@ -261,35 +309,12 @@ pub fn summarize_body(bytes: &[u8]) -> String {
     }
 }
 
-/// Size of one GUGiK request (metres per side).
-const GUGIK_TILE_M: f64 = 400.0;
-
-async fn fetch_mosaic(
-    service: &str,
-    template: &str,
-    area: (f64, f64, f64, f64),
-) -> AppResult<raster::Mosaic> {
-    let tiles = raster::tiles(area, GUGIK_TILE_M);
-    let mut grids = Vec::with_capacity(tiles.len());
-    for (i, tile) in tiles.iter().enumerate() {
-        let name = if tiles.len() > 1 {
-            format!("{service} (tile {}/{})", i + 1, tiles.len())
-        } else {
-            service.to_string()
-        };
-        grids.push(fetch_grid(&name, &fill_template(template, *tile), *tile).await?);
-    }
-    Ok(raster::Mosaic(grids))
-}
-
 async fn fetch_grid(
     service: &str,
     url: &str,
     area: (f64, f64, f64, f64),
 ) -> AppResult<raster::Grid> {
-    let res = get_with_retry(service, url).await?;
-    let status = res.status();
-    let bytes = res.bytes().await.map_err(|e| upstream(service, e))?;
+    let (status, bytes) = get_with_retry(service, url).await?;
     if !status.is_success() {
         let text = summarize_body(&bytes);
         return Err(AppError::Upstream(format!(
@@ -301,78 +326,191 @@ async fn fetch_grid(
             }
         )));
     }
-    raster::read_grid(&bytes, area).map_err(|e| {
+    let grid = raster::read_grid(&bytes, area).map_err(|e| {
         let head = summarize_body(&bytes[..bytes.len().min(120)]);
         AppError::Upstream(format!("{service}: {e} (response starts with {head:?})"))
-    })
+    })?;
+    let covered = raster::coverage(&grid, area);
+    if covered < 0.5 {
+        return Err(AppError::Upstream(format!(
+            "{service} returned data for a different area (covers {:.0}% of the request; \
+             check the subset axis order in the request template)",
+            covered * 100.0
+        )));
+    }
+    Ok(grid)
+}
+
+/// Side of one GUGiK tile, metres. NMPT is a 0.5 m ASCII grid that GUGiK
+/// renders slowly (about a minute per 0.03 km²), so tiles are small and only
+/// those near the track are fetched.
+pub const GUGIK_TILE_M: f64 = 150.0;
+/// Tiles within this distance of the track are fetched.
+pub const CORRIDOR_M: f64 = 50.0;
+/// Only the track within this distance of take-off is covered.
+pub const RADIUS_M: f64 = 500.0;
+/// Upper bound of tiles per flight (~1–3 min each); nearest to take-off first.
+pub const MAX_TILES: usize = 12;
+
+/// Progress of a running LiDAR fetch, shared with the API.
+#[derive(Debug, Default)]
+pub struct Progress {
+    pub done: AtomicUsize,
+    pub total: AtomicUsize,
 }
 
 pub struct LidarRequest<'a> {
     pub dtm_template: &'a str,
     pub dsm_template: &'a str,
-    pub bbox: BBox,
+    /// Track points (lon, lat).
+    pub track: &'a [(f64, f64)],
     /// Take-off point (lon, lat): its ground level is the height reference.
     pub reference: (f64, f64),
+    pub progress: Arc<Progress>,
 }
 
-/// Object heights (NMPT − NMT) from GUGiK as GeoJSON polygons with
-/// `height` (above local ground) and `groundRel` (ground relative to take-off).
-pub async fn gugik_lidar(req: LidarRequest<'_>) -> AppResult<Value> {
-    let b = req.bbox;
-    for (lon, lat) in [(b.west, b.south), (b.east, b.north)] {
-        if !puwg92::in_poland(lon, lat) {
-            return Err(AppError::NotAvailable(
-                "LiDAR heights from GUGiK are only available for flights in Poland.".into(),
-            ));
+/// Tiles of `size` m (aligned to multiples of `size` in EPSG:2180) that lie
+/// within `margin` of any track point, nearest to `reference` first, at most
+/// `max`. Returns the tiles and whether the list was cut.
+pub fn corridor_tiles(
+    points: &[(f64, f64)],
+    reference: (f64, f64),
+    size: f64,
+    margin: f64,
+    max: usize,
+) -> (Vec<(f64, f64, f64, f64)>, bool) {
+    let mut keys: Vec<(i64, i64)> = Vec::new();
+    for &(e, n) in points {
+        let (i0, i1) = (
+            ((e - margin) / size).floor() as i64,
+            ((e + margin) / size).floor() as i64,
+        );
+        let (j0, j1) = (
+            ((n - margin) / size).floor() as i64,
+            ((n + margin) / size).floor() as i64,
+        );
+        for i in i0..=i1 {
+            for j in j0..=j1 {
+                keys.push((i, j));
+            }
         }
     }
-    // Projected box covering the geographic one.
-    let corners = [
-        puwg92::forward(b.west, b.south),
-        puwg92::forward(b.west, b.north),
-        puwg92::forward(b.east, b.south),
-        puwg92::forward(b.east, b.north),
-    ];
-    let min_e = corners.iter().map(|c| c.0).fold(f64::MAX, f64::min).floor();
-    let max_e = corners.iter().map(|c| c.0).fold(f64::MIN, f64::max).ceil();
-    let min_n = corners.iter().map(|c| c.1).fold(f64::MAX, f64::min).floor();
-    let max_n = corners.iter().map(|c| c.1).fold(f64::MIN, f64::max).ceil();
-    let area = (min_e, min_n, max_e, max_n);
-
-    // NMPT is a 0.5 m ASCII grid (~8 bytes per value), so large areas are
-    // fetched as 400 m tiles. One request at a time: GUGiK drops connections
-    // intermittently, and parallel connections make it worse. Both models
-    // are attempted so an error names every failing service.
-    let dtm = fetch_mosaic("GUGiK NMT", req.dtm_template, area).await;
-    let dsm = fetch_mosaic("GUGiK NMPT", req.dsm_template, area).await;
-    let (dtm, dsm) = match (dtm, dsm) {
-        (Ok(dtm), Ok(dsm)) => (dtm, dsm),
-        (Err(e), Ok(_)) | (Ok(_), Err(e)) => return Err(e),
-        (Err(a), Err(b)) => return Err(AppError::Upstream(format!("{a}; {b}"))),
+    keys.sort_unstable();
+    keys.dedup();
+    let centre = |&(i, j): &(i64, i64)| {
+        let (ce, cn) = ((i as f64 + 0.5) * size, (j as f64 + 0.5) * size);
+        (ce - reference.0).powi(2) + (cn - reference.1).powi(2)
     };
+    keys.sort_by(|a, b| centre(a).total_cmp(&centre(b)));
+    let truncated = keys.len() > max;
+    keys.truncate(max);
+    let tiles = keys
+        .into_iter()
+        .map(|(i, j)| {
+            let (e, n) = (i as f64 * size, j as f64 * size);
+            (e, n, e + size, n + size)
+        })
+        .collect();
+    (tiles, truncated)
+}
 
-    let (re, rn) = puwg92::forward(req.reference.0, req.reference.1);
-    let reference_ground = dtm.at(re, rn).map(f64::from).unwrap_or_else(|| {
-        // Take-off outside the returned grids: use the lowest ground instead.
-        dtm.0
-            .iter()
-            .flat_map(|g| g.data.iter().copied())
-            .filter(|v| v.is_finite() && *v > -1000.0)
-            .fold(f32::MAX, f32::min) as f64
-    });
+/// Object heights (NMPT − NMT) from GUGiK for the flight's corridor, as
+/// GeoJSON polygons with `height` (above local ground) and `groundRel`
+/// (ground relative to take-off). Only the track within `RADIUS_M` of
+/// take-off is covered; `truncated` tells whether the track reached further
+/// or the corridor needed more than `MAX_TILES`. Tiles GUGiK keeps dropping
+/// the connection for are skipped and counted in `failedTiles`.
+pub async fn gugik_lidar(req: LidarRequest<'_>) -> AppResult<Value> {
+    if !req
+        .track
+        .iter()
+        .all(|&(lon, lat)| puwg92::in_poland(lon, lat))
+    {
+        return Err(AppError::NotAvailable(
+            "LiDAR heights from GUGiK are only available for flights in Poland.".into(),
+        ));
+    }
+    let (near, cut) = within_radius(req.track, req.reference, RADIUS_M);
+    // Always include take-off, even if the logged track starts further away.
+    let points: Vec<(f64, f64)> = std::iter::once(req.reference)
+        .chain(near)
+        .map(|(lon, lat)| puwg92::forward(lon, lat))
+        .collect();
+    let reference = puwg92::forward(req.reference.0, req.reference.1);
+    let (tiles, too_many) = corridor_tiles(&points, reference, GUGIK_TILE_M, CORRIDOR_M, MAX_TILES);
+    let truncated = cut || too_many;
+    req.progress.total.store(tiles.len(), Ordering::SeqCst);
+
+    // One request at a time: GUGiK drops connections intermittently and is
+    // slow to render NMPT, and parallel connections make both worse.
+    let mut pairs = Vec::with_capacity(tiles.len());
+    let mut failed = 0;
+    let mut last_error = None;
+    for (k, tile) in tiles.iter().enumerate() {
+        let label = |service: &str| format!("{service} (tile {}/{})", k + 1, tiles.len());
+        let pair = async {
+            let dtm = fetch_grid(
+                &label("GUGiK NMT"),
+                &fill_template(req.dtm_template, *tile),
+                *tile,
+            )
+            .await?;
+            let dsm = fetch_grid(
+                &label("GUGiK NMPT"),
+                &fill_template(req.dsm_template, *tile),
+                *tile,
+            )
+            .await?;
+            AppResult::Ok((*tile, dtm, dsm))
+        }
+        .await;
+        match pair {
+            Ok(p) => pairs.push(p),
+            // Connection still dropped after the retries: keep the other
+            // tiles rather than losing minutes of work.
+            // A first tile that cannot be fetched at all means the service is
+            // unreachable; report that instead of trying every tile.
+            Err(e @ AppError::Network(_)) if k > 0 => {
+                tracing::warn!("skipping tile: {e}");
+                failed += 1;
+                last_error = Some(e);
+            }
+            Err(e) => return Err(e),
+        }
+        req.progress.done.store(k + 1, Ordering::SeqCst);
+    }
+    if pairs.is_empty()
+        && let Some(e) = last_error
+    {
+        return Err(e);
+    }
+
+    let dtm_all = raster::Mosaic(pairs.iter().map(|(_, d, _)| d.clone()).collect());
+    let reference_ground = dtm_all
+        .at(reference.0, reference.1)
+        .map(f64::from)
+        .unwrap_or_else(|| {
+            // Take-off outside the fetched tiles: use the lowest ground instead.
+            dtm_all
+                .0
+                .iter()
+                .flat_map(|g| g.data.iter().copied())
+                .filter(|v| v.is_finite() && *v > -1000.0)
+                .fold(f32::MAX, f32::min) as f64
+        });
 
     let blocks = tokio::task::spawn_blocking(move || {
-        raster::blocks(
-            &dsm,
-            &dtm,
-            (min_e, min_n, max_e, max_n),
-            &BlockParams {
-                cell_m: 1.0,
-                min_height_m: 2.5,
-                reference_ground,
-                max_blocks: 60_000,
-            },
-        )
+        let params = BlockParams {
+            cell_m: 1.0,
+            min_height_m: 2.5,
+            reference_ground,
+            max_blocks: 60_000,
+        };
+        pairs
+            .iter()
+            .flat_map(|(tile, dtm, dsm)| raster::blocks(dsm, dtm, *tile, &params))
+            .take(params.max_blocks)
+            .collect::<Vec<_>>()
     })
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?;
@@ -400,7 +538,13 @@ pub async fn gugik_lidar(req: LidarRequest<'_>) -> AppResult<Value> {
             })
         })
         .collect();
-    Ok(json!({ "type": "FeatureCollection", "features": features }))
+    Ok(json!({
+        "type": "FeatureCollection",
+        "features": features,
+        "tiles": tiles.len(),
+        "truncated": truncated,
+        "failedTiles": failed,
+    }))
 }
 
 #[cfg(test)]
@@ -436,6 +580,45 @@ mod tests {
             "404 Not Found Not Found The requested URL was not found on this server."
         );
         assert_eq!(summarize_body(b""), "");
+    }
+
+    #[test]
+    fn radius_around_takeoff() {
+        let start = (21.0, 52.0);
+        // ~0.0073° of longitude ≈ 500 m at 52°N.
+        let pts = [start, (21.004, 52.0), (21.0072, 52.0), (21.02, 52.0)];
+        let (near, cut) = within_radius(&pts, start, 500.0);
+        assert_eq!(near.len(), 3);
+        assert!(cut);
+        assert!((distance_m(start, (21.0, 52.0045)) - 500.9).abs() < 1.0);
+        let (all, cut) = within_radius(&pts[..2], start, 500.0);
+        assert_eq!(all.len(), 2);
+        assert!(!cut);
+    }
+
+    #[test]
+    fn corridor_tiles_follow_the_track() {
+        // A 400 m track going east from (1000, 975).
+        let pts: Vec<(f64, f64)> = (0..=40)
+            .map(|i| (1000.0 + i as f64 * 10.0, 975.0))
+            .collect();
+        let (tiles, truncated) = corridor_tiles(&pts, (1000.0, 975.0), 150.0, 50.0, 100);
+        assert!(!truncated);
+        // 975 ± 50 stays inside the 900..1050 row; 950..1450 spans 4 columns.
+        assert!(
+            tiles.iter().all(|t| t.1 == 900.0 && t.3 == 1050.0),
+            "{tiles:?}"
+        );
+        assert_eq!(tiles.len(), 4);
+        assert_eq!(
+            tiles[0],
+            (900.0, 900.0, 1050.0, 1050.0),
+            "nearest to take-off first"
+        );
+        assert_eq!(tiles[3], (1350.0, 900.0, 1500.0, 1050.0));
+        let (cut, truncated) = corridor_tiles(&pts, (1000.0, 975.0), 150.0, 50.0, 2);
+        assert!(truncated);
+        assert_eq!(cut.len(), 2);
     }
 
     #[test]
