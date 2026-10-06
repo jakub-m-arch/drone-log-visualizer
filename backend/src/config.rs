@@ -32,9 +32,11 @@ pub const DEFAULT_OVERPASS_URL: &str = "https://overpass-api.de/api/interpreter"
 
 /// GUGiK WCS 2.0 GetCoverage requests for the 1 m NMT and NMPT grids, both
 /// with heights in the Kronsztadt 86 datum so their difference is consistent.
-/// Subset axes in EPSG:2180: `x` = northing, `y` = easting.
+/// Subset axes in EPSG:2180: `x` = northing, `y` = easting. NMPT's
+/// `image/tiff` output is a colour rendering, so its heights are requested
+/// as an Arc/Info ASCII grid.
 pub const DEFAULT_GUGIK_NMT_URL: &str = "https://mapy.geoportal.gov.pl/wss/service/PZGIK/NMT/GRID1/WCS/DigitalTerrainModelFormatTIFF?SERVICE=WCS&VERSION=2.0.1&REQUEST=GetCoverage&COVERAGEID=DTM_PL-KRON86-NH_TIFF&FORMAT=image/tiff&SUBSET=x({minN},{maxN})&SUBSET=y({minE},{maxE})";
-pub const DEFAULT_GUGIK_NMPT_URL: &str = "https://mapy.geoportal.gov.pl/wss/service/PZGIK/NMPT/GRID1/WCS/DigitalSurfaceModel?SERVICE=WCS&VERSION=2.0.1&REQUEST=GetCoverage&COVERAGEID=DSM_PL-KRON86-NH&FORMAT=image/tiff&SUBSET=x({minN},{maxN})&SUBSET=y({minE},{maxE})";
+pub const DEFAULT_GUGIK_NMPT_URL: &str = "https://mapy.geoportal.gov.pl/wss/service/PZGIK/NMPT/GRID1/WCS/DigitalSurfaceModel?SERVICE=WCS&VERSION=2.0.1&REQUEST=GetCoverage&COVERAGEID=DSM_PL-KRON86-NH&FORMAT=image/x-aaigrid&SUBSET=x({minN},{maxN})&SUBSET=y({minE},{maxE})";
 
 /// `off` disables, a value overrides, nothing selects the default.
 fn optional_url(value: Option<String>, default: &str) -> Option<String> {

@@ -56,6 +56,22 @@ async fn mock_services() -> (String, Calls) {
                     }
                 }
             }
+            if surface {
+                // Like GUGiK's NMPT: an Arc/Info ASCII grid, here northing-first
+                // (columns run north, the first row is the easternmost).
+                let mut text = format!(
+                    "ncols {h}\nnrows {w}\nxllcorner {n0}\nyllcorner {e0}\ncellsize 1\nNODATA_value -9999\n"
+                );
+                for col in (0..w).rev() {
+                    let row: Vec<String> = (0..h)
+                        .rev()
+                        .map(|r| data[r * w + col].to_string())
+                        .collect();
+                    text.push_str(&row.join(" "));
+                    text.push('\n');
+                }
+                return ([("content-type", "text/plain")], text.into_bytes());
+            }
             let g = Grid {
                 width: w,
                 height: h,

@@ -43,6 +43,12 @@ impl Grid {
 pub fn read_geotiff(bytes: &[u8]) -> Result<Grid, String> {
     let mut dec = Decoder::new(Cursor::new(bytes)).map_err(|e| format!("not a TIFF: {e}"))?;
     let (w, h) = dec.dimensions().map_err(|e| e.to_string())?;
+    let bands = dec.get_tag_u32(Tag::SamplesPerPixel).unwrap_or(1);
+    if bands > 1 {
+        return Err(format!(
+            "the service returned a {bands}-band colour image instead of elevation values"
+        ));
+    }
     let scale = dec
         .get_tag_f64_vec(Tag::Unknown(TAG_MODEL_PIXEL_SCALE))
         .map_err(|_| "GeoTIFF has no ModelPixelScale tag".to_string())?;
@@ -80,6 +86,119 @@ pub fn read_geotiff(bytes: &[u8]) -> Result<Grid, String> {
         data: data[..w * h].to_vec(),
         nodata,
     })
+}
+
+/// Reads an Arc/Info ASCII Grid (`ncols`, `nrows`, `xllcorner|xllcenter`,
+/// `yllcorner|yllcenter`, `cellsize` or `dx`/`dy`, optional `nodata_value`,
+/// then rows from north to south).
+///
+/// Servers for EPSG:2180 disagree on whether the grid's "x" is easting or
+/// northing. `expected` (min E, min N, max E, max N) is the requested box: the
+/// lower-left corner is matched against it and a northing-first grid is
+/// transposed into the usual north-up, easting-columns layout.
+pub fn read_aaigrid(bytes: &[u8], expected: (f64, f64, f64, f64)) -> Result<Grid, String> {
+    let text =
+        std::str::from_utf8(bytes).map_err(|_| "ASCII grid is not valid UTF-8".to_string())?;
+    let mut header: std::collections::HashMap<String, f64> = Default::default();
+    let mut rest = text;
+    loop {
+        let line_end = rest.find('\n').unwrap_or(rest.len());
+        let line = rest[..line_end].trim();
+        let mut parts = line.split_whitespace();
+        let (Some(key), Some(value), None) = (parts.next(), parts.next(), parts.next()) else {
+            break;
+        };
+        if !key.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) {
+            break;
+        }
+        let v: f64 = value
+            .parse()
+            .map_err(|_| format!("bad ASCII grid header value {line:?}"))?;
+        header.insert(key.to_ascii_lowercase(), v);
+        rest = &rest[(line_end + 1).min(rest.len())..];
+    }
+    let get = |k: &str| header.get(k).copied();
+    let ncols = get("ncols").ok_or("ASCII grid without ncols")? as usize;
+    let nrows = get("nrows").ok_or("ASCII grid without nrows")? as usize;
+    let (dx, dy) = match (get("cellsize"), get("dx"), get("dy")) {
+        (Some(c), _, _) => (c, c),
+        (None, Some(dx), Some(dy)) => (dx, dy),
+        _ => return Err("ASCII grid without cellsize".into()),
+    };
+    let x_ll = get("xllcorner")
+        .or_else(|| get("xllcenter").map(|c| c - dx / 2.0))
+        .ok_or("ASCII grid without xllcorner")?;
+    let y_ll = get("yllcorner")
+        .or_else(|| get("yllcenter").map(|c| c - dy / 2.0))
+        .ok_or("ASCII grid without yllcorner")?;
+    let nodata = get("nodata_value").map(|v| v as f32);
+
+    let values: Vec<f32> = rest
+        .split_whitespace()
+        .map(|v| {
+            v.parse::<f32>()
+                .map_err(|_| format!("bad ASCII grid value {v:?}"))
+        })
+        .collect::<Result<_, _>>()?;
+    if values.len() < ncols * nrows {
+        return Err(format!(
+            "ASCII grid has {} values, expected {}",
+            values.len(),
+            ncols * nrows
+        ));
+    }
+
+    let (min_e, min_n, _, _) = expected;
+    let normal = (x_ll - min_e).abs() + (y_ll - min_n).abs();
+    let swapped = (x_ll - min_n).abs() + (y_ll - min_e).abs();
+    if normal <= swapped {
+        return Ok(Grid {
+            width: ncols,
+            height: nrows,
+            left: x_ll,
+            top: y_ll + nrows as f64 * dy,
+            px: dx,
+            py: dy,
+            data: values[..ncols * nrows].to_vec(),
+            nodata,
+        });
+    }
+    // Northing-first grid: columns run north, rows run east (row 0 = max E).
+    let (w, h) = (nrows, ncols);
+    let mut data = vec![f32::NAN; w * h];
+    for row in 0..nrows {
+        for col in 0..ncols {
+            let (r, c) = (ncols - 1 - col, nrows - 1 - row);
+            data[r * w + c] = values[row * ncols + col];
+        }
+    }
+    Ok(Grid {
+        width: w,
+        height: h,
+        left: y_ll,
+        top: x_ll + ncols as f64 * dx,
+        px: dy,
+        py: dx,
+        data,
+        nodata,
+    })
+}
+
+/// Reads an elevation grid in either GeoTIFF or Arc/Info ASCII Grid format.
+pub fn read_grid(bytes: &[u8], expected: (f64, f64, f64, f64)) -> Result<Grid, String> {
+    if bytes.starts_with(b"II*\0") || bytes.starts_with(b"MM\0*") {
+        read_geotiff(bytes)
+    } else if bytes
+        .iter()
+        .skip_while(|b| b.is_ascii_whitespace())
+        .take(5)
+        .map(|b| b.to_ascii_lowercase())
+        .eq(b"ncols".iter().copied())
+    {
+        read_aaigrid(bytes, expected)
+    } else {
+        Err("the response is neither a GeoTIFF nor an ASCII grid".into())
+    }
 }
 
 /// Writes a single-band float GeoTIFF the way GDAL / WCS servers do
@@ -245,6 +364,56 @@ pub mod tests {
         assert_eq!(back.at(1001.2, 1999.2), Some(12.0));
         assert_eq!(back.at(999.0, 1999.2), None);
         assert!(read_geotiff(b"not a tiff").is_err());
+    }
+
+    #[test]
+    fn colour_images_are_rejected() {
+        use tiff::encoder::{TiffEncoder, colortype::RGB8};
+        let mut buf = Cursor::new(Vec::new());
+        TiffEncoder::new(&mut buf)
+            .unwrap()
+            .write_image::<RGB8>(2, 1, &[1, 2, 3, 4, 5, 6])
+            .unwrap();
+        let err = read_geotiff(&buf.into_inner()).unwrap_err();
+        assert!(err.contains("colour image"), "{err}");
+    }
+
+    #[test]
+    fn ascii_grid_easting_first() {
+        let text = b"ncols 3\nnrows 2\nxllcorner 1000\nyllcorner 2000\ncellsize 1\nNODATA_value -9999\n1 2 3\n4 5 -9999\n";
+        let g = read_grid(text, (1000.0, 2000.0, 1003.0, 2002.0)).unwrap();
+        assert_eq!((g.width, g.height, g.left, g.top), (3, 2, 1000.0, 2002.0));
+        assert_eq!(g.at(1000.5, 2001.5), Some(1.0)); // top-left
+        assert_eq!(g.at(1001.5, 2000.5), Some(5.0)); // bottom-middle
+        assert_eq!(g.at(1002.5, 2000.5), None); // nodata
+    }
+
+    #[test]
+    fn ascii_grid_northing_first_is_transposed() {
+        // Same 3 (E) × 2 (N) area served with x = northing, y = easting:
+        // 2 columns (north), 3 rows (east, first row = easternmost).
+        // Value = 10 * east_index + north_index (from SW).
+        let text = b"ncols 2\nnrows 3\nxllcenter 2000.5\nyllcenter 1000.5\ncellsize 1\n20 21\n10 11\n0 1\n";
+        let g = read_grid(text, (1000.0, 2000.0, 1003.0, 2002.0)).unwrap();
+        assert_eq!((g.width, g.height, g.left, g.top), (3, 2, 1000.0, 2002.0));
+        for e in 0..3 {
+            for n in 0..2 {
+                let v = g.at(1000.5 + e as f64, 2000.5 + n as f64).unwrap();
+                assert_eq!(v, (10 * e + n) as f32, "e={e} n={n}");
+            }
+        }
+    }
+
+    #[test]
+    fn unknown_formats_are_rejected() {
+        assert!(read_grid(b"<ServiceException/>", (0.0, 0.0, 1.0, 1.0)).is_err());
+        assert!(
+            read_grid(
+                b"ncols 2\nnrows 1\nxllcorner 0\nyllcorner 0\ncellsize 1\n1\n",
+                (0.0, 0.0, 2.0, 1.0)
+            )
+            .is_err()
+        );
     }
 
     #[test]

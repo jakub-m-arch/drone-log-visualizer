@@ -182,7 +182,11 @@ pub fn summarize_body(bytes: &[u8]) -> String {
     }
 }
 
-async fn fetch_grid(service: &str, url: &str) -> AppResult<raster::Grid> {
+async fn fetch_grid(
+    service: &str,
+    url: &str,
+    area: (f64, f64, f64, f64),
+) -> AppResult<raster::Grid> {
     let res = client()
         .get(url)
         .send()
@@ -201,8 +205,8 @@ async fn fetch_grid(service: &str, url: &str) -> AppResult<raster::Grid> {
             }
         )));
     }
-    raster::read_geotiff(&bytes).map_err(|e| {
-        let head = String::from_utf8_lossy(&bytes[..bytes.len().min(200)]).to_string();
+    raster::read_grid(&bytes, area).map_err(|e| {
+        let head = summarize_body(&bytes[..bytes.len().min(120)]);
         AppError::Upstream(format!("{service}: {e} (response starts with {head:?})"))
     })
 }
@@ -245,8 +249,8 @@ pub async fn gugik_lidar(req: LidarRequest<'_>) -> AppResult<Value> {
     );
     // Both requests run to completion so an error names every failing service.
     let (dtm, dsm) = match tokio::join!(
-        fetch_grid("GUGiK NMT", &dtm_url),
-        fetch_grid("GUGiK NMPT", &dsm_url),
+        fetch_grid("GUGiK NMT", &dtm_url, area),
+        fetch_grid("GUGiK NMPT", &dsm_url, area),
     ) {
         (Ok(dtm), Ok(dsm)) => (dtm, dsm),
         (Err(e), Ok(_)) | (Ok(_), Err(e)) => return Err(e),
