@@ -54,12 +54,12 @@ jobs:
           context: .
           push: false
           load: true
-          tags: dji-log-viewer:ci
+          tags: drone-log-visualizer:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Smoke test the image
         run: |
-          docker run -d --name viewer -p 8080:8080 dji-log-viewer:ci
+          docker run -d --name viewer -p 8080:8080 drone-log-visualizer:ci
           for i in $(seq 1 30); do
             curl -fsS http://localhost:8080/api/config && break
             sleep 1

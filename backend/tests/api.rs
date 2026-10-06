@@ -12,9 +12,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tower::ServiceExt;
 
-use dji_log_viewer::config::{ApiKey, Config};
-use dji_log_viewer::synthetic::{SynthFlight, SynthKeys};
-use dji_log_viewer::{AppState, app, db};
+use drone_log_visualizer::config::{ApiKey, Config};
+use drone_log_visualizer::synthetic::{SynthFlight, SynthKeys};
+use drone_log_visualizer::{AppState, app, db};
 
 const GOOD_KEY: &str = "test-key-123";
 

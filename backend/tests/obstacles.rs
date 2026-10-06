@@ -12,11 +12,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tower::ServiceExt;
 
-use dji_log_viewer::config::Config;
-use dji_log_viewer::obstacles::puwg92;
-use dji_log_viewer::obstacles::raster::{Grid, encode_geotiff};
-use dji_log_viewer::synthetic::SynthFlight;
-use dji_log_viewer::{AppState, app, db};
+use drone_log_visualizer::config::Config;
+use drone_log_visualizer::obstacles::puwg92;
+use drone_log_visualizer::obstacles::raster::{Grid, encode_geotiff};
+use drone_log_visualizer::synthetic::SynthFlight;
+use drone_log_visualizer::{AppState, app, db};
 
 #[derive(Clone, Default)]
 struct Calls {

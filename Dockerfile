@@ -14,8 +14,8 @@ WORKDIR /app/backend
 COPY backend/ ./
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/backend/target \
-    cargo build --release --locked --bin dji-log-viewer \
-    && cp target/release/dji-log-viewer /usr/local/bin/dji-log-viewer
+    cargo build --release --locked --bin drone-log-visualizer \
+    && cp target/release/drone-log-visualizer /usr/local/bin/drone-log-visualizer
 
 # ---- 3. Runtime ------------------------------------------------------------
 FROM debian:bookworm-slim
@@ -25,7 +25,7 @@ RUN useradd --system --uid 10001 --home-dir /app --shell /usr/sbin/nologin app \
 
 # TLS roots for calls to the DJI API (taken from the builder, no apt needed).
 COPY --from=backend /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
-COPY --from=backend /usr/local/bin/dji-log-viewer /usr/local/bin/dji-log-viewer
+COPY --from=backend /usr/local/bin/drone-log-visualizer /usr/local/bin/drone-log-visualizer
 COPY --from=frontend /app/frontend/dist /app/static
 
 ENV PORT=8080 \
@@ -38,5 +38,5 @@ WORKDIR /app
 VOLUME ["/data"]
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD ["dji-log-viewer", "healthcheck"]
-CMD ["dji-log-viewer"]
+    CMD ["drone-log-visualizer", "healthcheck"]
+CMD ["drone-log-visualizer"]

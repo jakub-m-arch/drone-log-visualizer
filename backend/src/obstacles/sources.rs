@@ -70,7 +70,7 @@ fn client_with_timeout(timeout: Duration) -> reqwest::Client {
     reqwest::Client::builder()
         .timeout(timeout)
         .user_agent(concat!(
-            "dji-log-viewer/",
+            "drone-log-visualizer/",
             env!("CARGO_PKG_VERSION"),
             " (+https://github.com/jakub-m-arch/drone-log-visualizer)"
         ))
