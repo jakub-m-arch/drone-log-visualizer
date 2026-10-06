@@ -21,6 +21,43 @@ export function sampleIndices(n: number, max: number): number[] {
 
 const M_PER_DEG_LAT = 111_320
 
+/**
+ * Drops points closer than `minM` (horizontal and vertical combined) to the
+ * previously kept one, so GPS jitter while hovering does not turn into a
+ * pile of tiny, randomly oriented wall segments. Indices refer to `coords`;
+ * the first and last points are always kept.
+ */
+export function thinByDistance(coords: LngLat[], heights: number[], minM: number): number[] {
+  if (coords.length <= 2) return coords.map((_, i) => i)
+  const keep = [0]
+  for (let i = 1; i < coords.length - 1; i++) {
+    const j = keep[keep.length - 1]
+    const mPerDegLon = M_PER_DEG_LAT * Math.cos(coords[j][1] * (Math.PI / 180))
+    const dx = (coords[i][0] - coords[j][0]) * mPerDegLon
+    const dy = (coords[i][1] - coords[j][1]) * M_PER_DEG_LAT
+    const dz = heights[i] - heights[j]
+    if (Math.hypot(dx, dy, dz) >= minM) keep.push(i)
+  }
+  keep.push(coords.length - 1)
+  return keep
+}
+
+/** Size of the aircraft box: ~1/30 of the track extent, between 2 and 6 m. */
+export function droneSizeM(coords: LngLat[]): number {
+  if (coords.length < 2) return 3
+  let [minX, minY] = coords[0]
+  let [maxX, maxY] = coords[0]
+  for (const [x, y] of coords) {
+    minX = Math.min(minX, x)
+    maxX = Math.max(maxX, x)
+    minY = Math.min(minY, y)
+    maxY = Math.max(maxY, y)
+  }
+  const mPerDegLon = M_PER_DEG_LAT * Math.cos(((minY + maxY) / 2) * (Math.PI / 180))
+  const extent = Math.hypot((maxX - minX) * mPerDegLon, (maxY - minY) * M_PER_DEG_LAT)
+  return Math.min(6, Math.max(2, extent / 30))
+}
+
 /** Rectangle of `widthM` around the segment a→b (lng/lat), closed ring. */
 export function segmentRect(a: LngLat, b: LngLat, widthM: number): LngLat[] {
   const mPerDegLon = M_PER_DEG_LAT * Math.cos(((a[1] + b[1]) / 2) * (Math.PI / 180))

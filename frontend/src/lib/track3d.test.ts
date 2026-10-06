@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { distanceM, type LngLat } from './geo'
-import { buildWalls, droneBox, sampleIndices, segmentRect } from './track3d'
+import { buildWalls, droneBox, droneSizeM, sampleIndices, segmentRect, thinByDistance } from './track3d'
 
 describe('sampleIndices', () => {
   it('keeps everything under the limit and endpoints over it', () => {
@@ -63,6 +63,31 @@ describe('buildWalls', () => {
     // i.e. a constant 150 m above sea level.
     expect(w[0].properties.top).toBeCloseTo(40, 1)
     expect(w[1].properties.top).toBeCloseTo(20, 1)
+  })
+})
+
+describe('thinByDistance', () => {
+  it('drops hover jitter but keeps real movement and the endpoints', () => {
+    const d = 0.00001 // ~0.7 m east-west at 52°N
+    const coords: LngLat[] = [
+      [21, 52],
+      [21 + d, 52], // 0.7 m: jitter
+      [21, 52], // back
+      [21 + 3 * d, 52], // 2 m: kept
+      [21 + 3 * d, 52], // same spot but 5 m higher: kept
+      [21 + 3 * d, 52], // last: always kept
+    ]
+    const heights = [0, 0, 0, 0, 5, 5]
+    expect(thinByDistance(coords, heights, 1.5)).toEqual([0, 3, 4, 5])
+    expect(thinByDistance(coords.slice(0, 2), heights, 1.5)).toEqual([0, 1])
+  })
+})
+
+describe('droneSizeM', () => {
+  it('scales with the track and is clamped', () => {
+    expect(droneSizeM([[21, 52], [21.0001, 52]])).toBe(2)
+    expect(droneSizeM([[21, 52], [21.002, 52]])).toBeCloseTo(137 / 30, 1)
+    expect(droneSizeM([[21, 52], [21.1, 52]])).toBe(6)
   })
 })
 

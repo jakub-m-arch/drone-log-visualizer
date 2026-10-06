@@ -23,7 +23,7 @@
     type ColorMode,
   } from '../lib/trackColor'
   import { formatNumber } from '../lib/format'
-  import { buildWalls, droneBox, sampleIndices, type GroundAt } from '../lib/track3d'
+  import { buildWalls, droneBox, droneSizeM, sampleIndices, thinByDistance, type GroundAt } from '../lib/track3d'
 
   let {
     config,
@@ -47,6 +47,7 @@
   let ready = $state(false)
 
   const track = $derived(trackPoints(tel))
+  const boxSize = $derived(droneSizeM(track.coords))
   const photos = $derived(photoPoints(tel, track))
   const recordings = $derived(recordingSegments(tel, track))
 
@@ -99,7 +100,12 @@
   /** (Re)builds the 3D ribbon and curtain; skipped when nothing changed. */
   function updateWalls(force = false) {
     if (!map || !ready || !is3d || track.coords.length < 2) return
-    const idx = sampleIndices(track.coords.length, 1500)
+    const thinned = thinByDistance(
+      track.coords,
+      track.idx.map((i) => tel.heightM[i] ?? 0),
+      1.5,
+    )
+    const idx = sampleIndices(thinned.length, 1500).map((k) => thinned[k])
     const coords = idx.map((k) => track.coords[k])
     const heights = idx.map((k) => tel.heightM[track.idx[k]] ?? 0)
     const all = pointColors(tel, track, colorMode)
@@ -112,8 +118,8 @@
     wallsSignature = signature
 
     const opts = { heights, colors, groundAt, takeoffGround }
-    const ribbon = buildWalls(coords, { ...opts, widthM: 3, ribbonM: 2 })
-    const curtain = buildWalls(coords, { ...opts, widthM: 0.8, ribbonM: null })
+    const ribbon = buildWalls(coords, { ...opts, widthM: 1.5, ribbonM: 1 })
+    const curtain = buildWalls(coords, { ...opts, widthM: 0.4, ribbonM: null })
     ;(map.getSource('ribbon') as GeoJSONSource).setData({ type: 'FeatureCollection', features: ribbon })
     ;(map.getSource('curtain') as GeoJSONSource).setData({ type: 'FeatureCollection', features: curtain })
     // The take-off ground level may have just become known: re-place the aircraft.
@@ -123,7 +129,7 @@
   function updateDroneBox() {
     if (!map || !ready || !is3d || !track.coords.length) return
     const n = Math.max(1, pointsUpTo(track.idx, cursor))
-    const box = droneBox(track.coords[n - 1], tel.heightM[cursor] ?? 0, 6, groundLookup(), takeoffGround)
+    const box = droneBox(track.coords[n - 1], tel.heightM[cursor] ?? 0, boxSize, groundLookup(), takeoffGround)
     ;(map.getSource('drone3d') as GeoJSONSource | undefined)?.setData({
       type: 'FeatureCollection',
       features: [box],
