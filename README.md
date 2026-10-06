@@ -152,10 +152,10 @@ by the server, for the flight's area plus 100 m, and then cached in SQLite:
   by GUGiK. Their difference is the real height of every tree, building and
   other object above ground; it is drawn as 1 m blocks (objects ≥ 2.5 m, area
   up to 1.5 × 1.5 km). Coordinates are converted to PUWG 1992 (EPSG:2180).
-  The default request templates point at GUGiK's WCS services and **have not
-  been verified against the live service yet**; if GUGiK answers with an
-  error, the message is shown in the map legend, and `GUGIK_NMT_URL` /
-  `GUGIK_NMPT_URL` can be adjusted without code changes.
+  The default requests use GUGiK's public WCS services (NMT
+  `DTM_PL-KRON86-NH_TIFF`, NMPT `DSM_PL-KRON86-NH`, both in the Kronsztadt 86
+  height datum). If GUGiK changes them, the error is shown in the map legend
+  and `GUGIK_NMT_URL` / `GUGIK_NMPT_URL` can be adjusted without code changes.
 
 Both requests reveal the flight's area to the respective service.
 
